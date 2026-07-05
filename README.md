@@ -40,6 +40,37 @@ KAKAO_REST_API_KEY=발급받은_REST_API_KEY
 
 키 설정 후 서버를 다시 실행하고 `/api/places/sync`를 호출하면 카카오 장소가 로컬 JSON DB에 합쳐집니다.
 
+## AI Agent 동선 생성
+
+`OPENAI_API_KEY`가 설정되어 있으면 추천 요청은 다음 순서로 동작합니다.
+
+1. LLM이 사용자 입력을 여행 의도와 선호 태그로 해석합니다.
+2. 앱이 카카오/관광 API 기반 로컬 DB에서 품질 필터를 통과한 후보를 조회합니다.
+3. LLM이 후보의 품질, 거리, 예산, 날씨, 카테고리 균형을 비교해 일정에 넣을 장소와 순서를 선택합니다.
+4. LLM 선택이 실패하거나 API 키가 없으면 규칙 기반 추천으로 fallback합니다.
+
+### Gemini 임시 실행
+
+OpenAI 키가 동작하지 않을 때는 임시 파일을 실행할 수 있습니다.
+
+```powershell
+GEMINI_API_KEY=발급받은_GEMINI_API_KEY
+GEMINI_MODEL=gemini-1.5-flash
+python app_gemini.py
+```
+
+Gemini 임시 앱은 `http://127.0.0.1:5001`에서 실행됩니다. 원본 `app.py`는 OpenAI 버전으로 유지됩니다.
+
+## ODsay 대중교통 안내
+
+대중교통 이동 안내를 표시하려면 `.env`에 ODsay 키를 추가합니다.
+
+```powershell
+ODSAY_API_KEY=발급받은_ODSAY_API_KEY
+```
+
+`대중교통` 선택 시 도보 약 15분 이내 구간은 도보로 표시하고, 그보다 먼 구간은 ODsay 버스 후보를 최대 4개까지 표시합니다. 당일치기 일정은 버스 이용 구간을 최대 2번까지 사용하고, 같은 좌표 구간은 `data/odsay_transit_cache.json`에 캐시합니다.
+
 ## TourAPI 사용
 
 충청북도 API 수집이 실패하거나 TourAPI를 우선 활용하려면 서비스키를 환경변수로 설정합니다.

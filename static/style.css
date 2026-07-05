@@ -252,6 +252,24 @@ h3 {
   color: var(--muted);
 }
 
+.move-info {
+  color: var(--accent-dark);
+  font-weight: 700;
+}
+
+.transit-options {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 10px;
+}
+
+.transit-options p {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 .timeline-item span {
   color: var(--accent-dark);
 }

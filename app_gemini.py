@@ -17,13 +17,16 @@ from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
+# Temporary Gemini build.
+# app.py keeps the original OpenAI implementation; this file uses Gemini for
+# intent parsing, route planning, and final comments while preserving features.
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 PLACE_DB_PATH = DATA_DIR / "cheongju_places.json"
 
 
-def load_env_file() -> None:
+def load_env_file(override: bool = False) -> None:
     env_path = BASE_DIR / ".env"
     if not env_path.exists():
         return
@@ -32,7 +35,10 @@ def load_env_file() -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        env_key = key.strip()
+        env_value = value.strip().strip('"').strip("'")
+        if override or not os.environ.get(env_key):
+            os.environ[env_key] = env_value
 
 
 load_env_file()
@@ -48,6 +54,12 @@ TOUR_API_AREA_CODE = os.getenv("TOUR_API_AREA_CODE", "33")
 TOUR_API_SIGUNGU_CODE = os.getenv("TOUR_API_SIGUNGU_CODE", "10")
 KAKAO_LOCAL_API_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY") or os.getenv("KAKAO_API_KEY")
+ODSAY_TRANSIT_API_URL = "https://api.odsay.com/v1/api/searchPubTransPathT"
+ODSAY_API_KEY = os.getenv("ODSAY_API_KEY") or os.getenv("ODSAY_KEY")
+ODSAY_CACHE_PATH = DATA_DIR / "odsay_transit_cache.json"
+WALK_ONLY_MAX_MINUTES = 15
+DAY_TRIP_MAX_TRANSIT_LEGS = 2
+TRANSIT_OPTION_LIMIT = 4
 
 KAKAO_KEYWORD_SEARCHES = [
     ("청주 성안길 맛집", "meal"),
@@ -818,6 +830,135 @@ def fetch_kakao_places() -> list[dict[str, Any]]:
                 break
     return places
 
+
+def transit_cache_key(start: dict[str, float], end: dict[str, float]) -> str:
+    return f"{start['lat']:.6f},{start['lng']:.6f}->{end['lat']:.6f},{end['lng']:.6f}"
+
+
+def load_odsay_cache() -> dict[str, Any]:
+    if not ODSAY_CACHE_PATH.exists():
+        return {}
+    try:
+        payload = json.loads(ODSAY_CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_odsay_cache(cache: dict[str, Any]) -> None:
+    DATA_DIR.mkdir(exist_ok=True)
+    ODSAY_CACHE_PATH.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def unique_bus_numbers(option: dict[str, Any]) -> list[str]:
+    numbers: list[str] = []
+    for segment in option.get("segments", []):
+        for bus_no in segment.get("bus_numbers", []):
+            if bus_no and bus_no not in numbers:
+                numbers.append(bus_no)
+    return numbers
+
+
+def format_transit_summary(option: dict[str, Any]) -> str:
+    bus_numbers = unique_bus_numbers(option)
+    bus_text = ", ".join(bus_numbers[:4]) if bus_numbers else "버스"
+    stations = [
+        f"{segment.get('start_station', '')} 승차 → {segment.get('end_station', '')} 하차"
+        for segment in option.get("segments", [])
+        if segment.get("start_station") or segment.get("end_station")
+    ]
+    station_text = " / ".join(stations[:2]) if stations else "정류장 정보 확인 필요"
+    return f"버스 {bus_text} / {station_text} / 약 {option.get('total_time', 0)}분"
+
+
+def parse_odsay_path(path: dict[str, Any]) -> dict[str, Any] | None:
+    info = path.get("info", {}) if isinstance(path, dict) else {}
+    total_time = int(info.get("totalTime") or 0)
+    if total_time <= 0:
+        return None
+
+    segments: list[dict[str, Any]] = []
+    for sub_path in path.get("subPath", []):
+        if int(sub_path.get("trafficType") or 0) != 2:
+            continue
+        lanes = sub_path.get("lane", [])
+        bus_numbers: list[str] = []
+        for lane in lanes:
+            bus_no = str(lane.get("busNo") or lane.get("name") or "").strip()
+            if bus_no and bus_no not in bus_numbers:
+                bus_numbers.append(bus_no)
+        if not bus_numbers:
+            continue
+        segments.append(
+            {
+                "bus_numbers": bus_numbers,
+                "start_station": str(sub_path.get("startName") or "").strip(),
+                "end_station": str(sub_path.get("endName") or "").strip(),
+                "section_time": int(sub_path.get("sectionTime") or 0),
+            }
+        )
+
+    if not segments:
+        return None
+
+    option = {
+        "total_time": total_time,
+        "payment": int(info.get("payment") or 0),
+        "bus_count": len(segments),
+        "segments": segments,
+    }
+    option["summary"] = format_transit_summary(option)
+    return option
+
+
+def odsay_transit_options(start: dict[str, float], end: dict[str, float]) -> tuple[list[dict[str, Any]], str | None]:
+    load_env_file(override=True)
+    api_key = os.getenv("ODSAY_API_KEY") or os.getenv("ODSAY_KEY")
+    if not api_key:
+        return [], "ODSAY_API_KEY 없음"
+
+    cache = load_odsay_cache()
+    key = transit_cache_key(start, end)
+    if key in cache and cache[key]:
+        return cache[key], None
+
+    try:
+        raw = http_get(
+            ODSAY_TRANSIT_API_URL,
+            {
+                "SX": f"{start['lng']:.7f}",
+                "SY": f"{start['lat']:.7f}",
+                "EX": f"{end['lng']:.7f}",
+                "EY": f"{end['lat']:.7f}",
+                "apiKey": api_key,
+            },
+            timeout=10,
+        )
+        payload = parse_api_payload(raw)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, ET.ParseError, OSError) as error:
+        return [], str(error)
+
+    if isinstance(payload, dict) and payload.get("error"):
+        errors = payload.get("error")
+        if isinstance(errors, list) and errors:
+            message = errors[0].get("message") if isinstance(errors[0], dict) else str(errors[0])
+            code = errors[0].get("code") if isinstance(errors[0], dict) else ""
+            return [], f"ODsay API 오류 {code}: {message}".strip()
+        return [], f"ODsay API 오류: {payload.get('error')}"
+
+    paths = payload.get("result", {}).get("path", []) if isinstance(payload, dict) else []
+    options = []
+    for path in paths:
+        option = parse_odsay_path(path)
+        if option:
+            options.append(option)
+
+    options = sorted(options, key=lambda item: (item["total_time"], item.get("payment", 0)))[:TRANSIT_OPTION_LIMIT]
+    cache[key] = options
+    save_odsay_cache(cache)
+    return options, None
+
+
 ACCOMMODATION_DB = [
     {
         "name": "성안길 비즈니스 호텔",
@@ -955,23 +1096,46 @@ def extract_json_payload(text: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def openai_json_tool(prompt: str, temperature: float = 0.2, timeout: int = 18) -> tuple[dict[str, Any] | None, str]:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return None, "OPENAI_API_KEY 없음"
+def extract_gemini_text(data: dict[str, Any]) -> str:
+    text_parts: list[str] = []
+    for candidate in data.get("candidates", []):
+        content = candidate.get("content", {})
+        for part in content.get("parts", []):
+            if part.get("text"):
+                text_parts.append(str(part["text"]))
+    return "\n".join(text_parts).strip()
 
+
+def gemini_json_tool(prompt: str, temperature: float = 0.2, timeout: int = 18) -> tuple[dict[str, Any] | None, str]:
+    # Original app.py uses OpenAI Responses API here. This temporary copy keeps
+    # the same caller contract but sends the prompt to Gemini instead.
+    load_env_file(override=True)
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return None, "GEMINI_API_KEY 없음"
+
+    model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
     payload = {
-        "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-        "input": prompt,
-        "temperature": temperature,
-    }
-    request = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": prompt}],
+            }
+        ],
+        "generationConfig": {
+            "temperature": temperature,
+            "responseMimeType": "application/json",
         },
+    }
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{urllib.parse.quote(model, safe='-_.')}:generateContent"
+        f"?key={urllib.parse.quote(api_key)}"
+    )
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
         method="POST",
     )
 
@@ -981,11 +1145,11 @@ def openai_json_tool(prompt: str, temperature: float = 0.2, timeout: int = 18) -
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as error:
         return None, str(error)
 
-    text = extract_openai_text(data)
+    text = extract_gemini_text(data)
     parsed = extract_json_payload(text)
     if parsed is None:
         return None, "LLM JSON 파싱 실패"
-    return parsed, "OpenAI LLM"
+    return parsed, "Gemini LLM"
 
 
 def llm_intent_tool(state: AgentState) -> tuple[list[str], dict[str, Any], str]:
@@ -999,7 +1163,7 @@ def llm_intent_tool(state: AgentState) -> tuple[list[str], dict[str, Any], str]:
         f"사용자 입력: {state.style_text}\n"
         f"기간: {state.duration}, 이동수단: {state.transport}, 날씨: {state.weather}, 예산: {state.budget}"
     )
-    parsed, mode = openai_json_tool(prompt)
+    parsed, mode = gemini_json_tool(prompt)
     if not parsed:
         return fallback_tags, {"intent_summary": "규칙 기반 태그 분석", "must_have": [], "avoid": []}, f"의도 해석 Fallback: {mode}"
 
@@ -1007,7 +1171,7 @@ def llm_intent_tool(state: AgentState) -> tuple[list[str], dict[str, Any], str]:
     tags = [str(tag).strip() for tag in parsed.get("tags", []) if str(tag).strip() in allowed]
     if not tags:
         tags = fallback_tags
-    return tags, parsed, "OpenAI LLM 의도 해석"
+    return tags, parsed, "Gemini LLM 의도 해석"
 
 
 def weather_filter_score(place: dict[str, Any], weather: str) -> float:
@@ -1474,7 +1638,7 @@ def recommendation_tool(
 def candidate_lookup_tool(
     state: AgentState,
     tags: list[str],
-    max_candidates: int = 48,
+    max_candidates: int = 28,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     slots = itinerary_slots(state.duration)
     if state.transport == "도보 중심" and state.duration == "당일치기":
@@ -1532,7 +1696,7 @@ def candidate_lookup_tool(
     selected_names: set[str] = set()
     for slot in slots:
         slot_candidates = [place for place in ranked if place["name"] not in selected_names and role_matches(place, slot["role"])]
-        for place in slot_candidates[:8]:
+        for place in slot_candidates[:4]:
             selected.append(place)
             selected_names.add(place["name"])
 
@@ -1554,12 +1718,10 @@ def compact_candidate_for_llm(index: int, place: dict[str, Any]) -> dict[str, An
         "role": place.get("role"),
         "cost": place["cost"],
         "indoor": place["indoor"],
-        "tags": place["tags"],
         "matched_tags": place.get("matched_tags", []),
         "quality_score": place.get("quality_score"),
         "agent_score": place.get("agent_score"),
         "start_distance_km": place.get("start_distance_km"),
-        "address": place.get("address"),
         "source": place.get("source"),
         "phone_exists": bool(place.get("phone")),
         "map_exists": bool(place.get("map_url") or place.get("url")),
@@ -1633,7 +1795,7 @@ def llm_route_planner_tool(
         f"필요 슬롯: {json.dumps(slots, ensure_ascii=False)}\n"
         f"후보 목록: {json.dumps(compact_candidates, ensure_ascii=False)}"
     )
-    parsed, mode = openai_json_tool(prompt, temperature=0.25, timeout=25)
+    parsed, mode = gemini_json_tool(prompt, temperature=0.25, timeout=60)
     if not parsed:
         return [], f"LLM 동선 선택 Fallback: {mode}", {}
 
@@ -1641,7 +1803,7 @@ def llm_route_planner_tool(
     if not isinstance(selected_items, list):
         return [], "LLM 동선 선택 JSON 형식 오류 Fallback", parsed
     route = hydrate_llm_route(selected_items, candidates, slots, tags)
-    return route, "OpenAI LLM 동선 선택", parsed
+    return route, "Gemini LLM 동선 선택", parsed
 
 
 def balance_categories(
@@ -1739,6 +1901,7 @@ def distance_tool(
     start_point: dict[str, float],
     route: list[dict[str, Any]],
     transport: str,
+    duration: str,
     accommodation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     speed = TRANSPORT_SPEED_KMH[transport]
@@ -1746,6 +1909,8 @@ def distance_tool(
     current_name = "출발지"
     current = start_point
     current_day = 1
+    transit_leg_count = 0
+    max_transit_legs = DAY_TRIP_MAX_TRANSIT_LEGS if duration == "당일치기" else len(route)
 
     for place in route:
         place_day = int(place.get("day", 1))
@@ -1755,13 +1920,36 @@ def distance_tool(
             current_day = place_day
 
         distance = haversine_km(current, place)
-        move_minutes = max(5, round(distance / speed * 60))
+        walk_minutes = max(5, round(distance / TRANSPORT_SPEED_KMH["도보 중심"] * 60))
+        mode = "walk"
+        transit_options: list[dict[str, Any]] = []
+        transit_error = None
+
+        if transport == "대중교통" and walk_minutes > WALK_ONLY_MAX_MINUTES and transit_leg_count < max_transit_legs:
+            transit_options, transit_error = odsay_transit_options(current, place)
+            if transit_options:
+                mode = "transit"
+                transit_leg_count += 1
+                move_minutes = max(5, int(transit_options[0]["total_time"]))
+            else:
+                move_minutes = walk_minutes
+        elif transport == "대중교통":
+            move_minutes = walk_minutes
+            if walk_minutes > WALK_ONLY_MAX_MINUTES and transit_leg_count >= max_transit_legs:
+                transit_error = "당일치기 버스 이용 최대 2회 조건으로 도보 이동 처리"
+        else:
+            move_minutes = max(5, round(distance / speed * 60))
+
         legs.append(
             {
                 "from": current_name,
                 "to": place["name"],
                 "distance_km": round(distance, 2),
                 "move_minutes": move_minutes,
+                "walk_minutes": walk_minutes,
+                "mode": mode,
+                "transit_options": transit_options,
+                "transit_error": transit_error,
             }
         )
         current_name = place["name"]
@@ -2044,10 +2232,13 @@ def llm_response_tool(
         total_move_minutes,
         accommodation,
     )
-    api_key = os.getenv("OPENAI_API_KEY")
+    # Original app.py uses OpenAI Responses API here. This temporary copy uses
+    # Gemini for the same final-comment role.
+    load_env_file(override=True)
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
         return (
-            "현재 실행 환경에는 OPENAI_API_KEY가 없어 규칙 기반 Fallback으로 최종 문장을 생성했습니다. "
+            "현재 실행 환경에는 GEMINI_API_KEY가 없어 규칙 기반 Fallback으로 최종 문장을 생성했습니다. "
             "추천 결과는 Tool들이 만든 Context를 기반으로 구성되었습니다.",
             "규칙 기반 Fallback",
         )
@@ -2058,29 +2249,38 @@ def llm_response_tool(
         "예산, 날씨, 동선 최적화 이유를 자연스럽게 포함해라.\n\n"
         f"{context}"
     )
+    model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
     payload = {
-        "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-        "input": prompt,
-        "temperature": 0.4,
-    }
-    request = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": prompt}],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.4,
         },
+    }
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{urllib.parse.quote(model, safe='-_.')}:generateContent"
+        f"?key={urllib.parse.quote(api_key)}"
+    )
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
         method="POST",
     )
 
     try:
         with urllib.request.urlopen(request, timeout=12) as response:
             data = json.loads(response.read().decode("utf-8"))
-            llm_text = extract_openai_text(data)
+            llm_text = extract_gemini_text(data)
             if llm_text:
-                return llm_text, "OpenAI LLM"
+                return llm_text, "Gemini LLM"
             return (
-                "OpenAI 호출은 성공했지만 응답 텍스트가 비어 있어 규칙 기반 Fallback 문장을 사용했습니다.",
+                "Gemini 호출은 성공했지만 응답 텍스트가 비어 있어 규칙 기반 Fallback 문장을 사용했습니다.",
                 "LLM 응답 없음 Fallback",
             )
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as error:
@@ -2143,7 +2343,7 @@ def run_agent(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
     else:
         state.warnings.append(f"{intent_mode} / {planner_mode}")
     accommodation = accommodation_tool(state, route, sum(place["cost"] for place in route))
-    legs = distance_tool(state.start_point, route, state.transport, accommodation)
+    legs = distance_tool(state.start_point, route, state.transport, state.duration, accommodation)
     return output_parser(
         state,
         route,
@@ -2186,4 +2386,4 @@ def sync_places():
 
 
 if __name__ == "__main__":
-    app.run(debug=False, host="127.0.0.1", port=5000)
+    app.run(debug=False, host="127.0.0.1", port=5001)

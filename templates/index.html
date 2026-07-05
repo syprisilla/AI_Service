@@ -4,7 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Cheongju Trip Agent</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='style.css') }}"
+    />
   </head>
   <body>
     <main class="app-shell">
@@ -35,7 +38,9 @@
 
           <label>
             여행 스타일
-            <textarea name="style_text" rows="4">카페 가고 싶고 사진 찍기 좋은 곳, 밥도 먹고 싶어</textarea>
+            <textarea name="style_text" rows="4">
+카페 가고 싶고 사진 찍기 좋은 곳, 밥도 먹고 싶어</textarea
+            >
           </label>
 
           <div class="grid-two">
@@ -71,7 +76,10 @@
       <section class="panel result-panel">
         <div id="emptyState" class="empty-state">
           <h2>취향만 입력하면 장소와 동선을 자동으로 고릅니다.</h2>
-          <p>장소명은 직접 입력하지 않아도 됩니다. Agent가 관광 API에서 수집한 로컬 JSON DB, 태그 분석, 날씨 필터, 거리 계산을 순서대로 실행합니다.</p>
+          <p>
+            장소명은 직접 입력하지 않아도 됩니다. Agent가 관광 API에서 수집한
+            로컬 JSON DB, 태그 분석, 날씨 필터, 거리 계산을 순서대로 실행합니다.
+          </p>
         </div>
 
         <div id="result" class="result hidden">
@@ -167,17 +175,25 @@
         emptyState.classList.add("hidden");
         result.classList.remove("hidden");
 
-        document.querySelector("#tagLine").textContent = `${data.summary.weather} · ${data.summary.transport} · ${data.summary.tags.join(", ")}`;
+        document.querySelector("#tagLine").textContent =
+          `${data.summary.weather} · ${data.summary.transport} · ${data.summary.tags.join(", ")}`;
         document.querySelector("#resultTitle").textContent = data.summary.title;
-        document.querySelector("#totalDistance").textContent = `${data.summary.total_distance}km`;
-        document.querySelector("#totalCost").textContent = `${data.summary.total_cost.toLocaleString()}원 / ${data.summary.budget.toLocaleString()}원`;
-        document.querySelector("#moveTime").textContent = `${data.summary.total_move_minutes}분`;
+        document.querySelector("#totalDistance").textContent =
+          `${data.summary.total_distance}km`;
+        document.querySelector("#totalCost").textContent =
+          `${data.summary.total_cost.toLocaleString()}원 / ${data.summary.budget.toLocaleString()}원`;
+        document.querySelector("#moveTime").textContent =
+          `${data.summary.total_move_minutes}분`;
         document.querySelector("#finish").textContent = data.summary.finish;
         document.querySelector("#aiMode").textContent = data.summary.ai_mode;
-        document.querySelector("#aiComment").textContent = data.summary.ai_comment;
-        document.querySelector("#routeText").textContent = data.summary.route_text;
+        document.querySelector("#aiComment").textContent =
+          data.summary.ai_comment;
+        document.querySelector("#routeText").textContent =
+          data.summary.route_text;
 
-        const accommodationSection = document.querySelector("#accommodationSection");
+        const accommodationSection = document.querySelector(
+          "#accommodationSection",
+        );
         const accommodation = document.querySelector("#accommodation");
         if (data.accommodation) {
           accommodationSection.classList.remove("hidden");
@@ -196,20 +212,39 @@
         }
 
         document.querySelector("#schedule").innerHTML = data.schedule
-          .map((item) => `
-            <article class="timeline-item">
-              <div class="time">Day ${item.day}<br>${item.time}</div>
-              <div>
-                <h4>${item.place}</h4>
-                <p>${item.category} · ${item.indoor ? "실내" : "야외"} · ${item.cost.toLocaleString()}원</p>
-                <span>${item.reason}</span>
-              </div>
-            </article>
-          `)
+          .map((item, index) => {
+            const leg = data.legs[index];
+            const transitOptions =
+              leg && leg.transit_options && leg.transit_options.length
+                ? `<div class="transit-options">
+                    ${leg.transit_options
+                      .map((option) => `<p>🚌 ${option.summary}</p>`)
+                      .join("")}
+                  </div>`
+                : "";
+            const moveInfo = leg
+              ? leg.mode === "transit"
+                ? `<p class="move-info">🚌 ${leg.from} → ${leg.to} : 약 ${leg.move_minutes}분 (${leg.distance_km}km)</p>${transitOptions}`
+                : `<p class="move-info">🚶 ${leg.from} → ${leg.to} : 약 ${leg.move_minutes}분 (${leg.distance_km}km)</p>${leg.transit_error ? `<p class="move-info">${leg.transit_error}</p>` : ""}`
+              : "";
+
+            return `
+      <article class="timeline-item">
+        <div class="time">Day ${item.day}<br>${item.time}</div>
+        <div>
+          ${moveInfo}
+          <h4>${item.place}</h4>
+          <p>${item.category} · ${item.indoor ? "실내" : "야외"} · ${item.cost.toLocaleString()}원</p>
+          <span>${item.reason}</span>
+        </div>
+      </article>
+    `;
+          })
           .join("");
 
         document.querySelector("#places").innerHTML = data.places
-          .map((place) => `
+          .map(
+            (place) => `
             <article class="place-card">
               <div>
                 <h4>${place.name}</h4>
@@ -222,7 +257,8 @@
                 ${place.tags.map((tag) => `<span>${tag}</span>`).join("")}
               </div>
             </article>
-          `)
+          `,
+          )
           .join("");
 
         document.querySelector("#flow").innerHTML = data.agent_flow

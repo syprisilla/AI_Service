@@ -31,6 +31,7 @@ data/*.json
 .idea/
 .agents/
 .codex/
+tempCodeRunnerFile.py
 
 # OS files
 .DS_Store
