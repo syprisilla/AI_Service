@@ -21,6 +21,23 @@ app = Flask(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 PLACE_DB_PATH = DATA_DIR / "cheongju_places.json"
+
+
+def load_env_file() -> None:
+    env_path = BASE_DIR / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+load_env_file()
+
+
 CHUNGBUK_TOUR_API_URL = os.getenv(
     "CHUNGBUK_TOUR_API_URL",
     "https://tour.chungbuk.go.kr/openapi/tourInfo/attr.do",
@@ -29,6 +46,27 @@ TOUR_API_BASE_URL = "https://apis.data.go.kr/B551011/KorService1/areaBasedList1"
 TOUR_API_KEY = os.getenv("TOUR_API_KEY") or os.getenv("TOURAPI_SERVICE_KEY")
 TOUR_API_AREA_CODE = os.getenv("TOUR_API_AREA_CODE", "33")
 TOUR_API_SIGUNGU_CODE = os.getenv("TOUR_API_SIGUNGU_CODE", "10")
+KAKAO_LOCAL_API_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
+KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY") or os.getenv("KAKAO_API_KEY")
+
+KAKAO_KEYWORD_SEARCHES = [
+    ("청주 성안길 맛집", "meal"),
+    ("청주 성안길 카페", "cafe"),
+    ("청주 운리단길 카페", "cafe"),
+    ("청주 수암골 카페", "cafe"),
+    ("청주 애견동반 카페", "cafe"),
+    ("청주 동물 체험", "activity"),
+    ("청주 반려견 놀이터", "activity"),
+    ("청주 육거리시장 맛집", "meal"),
+    ("청주 청주대 맛집", "meal"),
+    ("청주 충북대 맛집", "meal"),
+    ("청주 브런치", "meal"),
+    ("청주 베이커리 카페", "cafe"),
+    ("청주 체험 놀거리", "activity"),
+    ("청주 실내 놀거리", "activity"),
+    ("청주 호텔", "lodging"),
+    ("오송역 호텔", "lodging"),
+]
 
 START_POINTS = {
     "청주고속버스터미널": {"lat": 36.6260, "lng": 127.4317},
@@ -40,6 +78,7 @@ START_POINTS = {
 STYLE_KEYWORDS = {
     "카페": ["카페", "커피", "디저트", "감성"],
     "맛집": ["맛집", "밥", "식사", "먹거리", "시장", "로컬"],
+    "동물": ["동물", "반려견", "강아지", "고양이", "애견", "펫", "동물원"],
     "산책": ["산책", "걷", "걷기", "느긋", "힐링"],
     "사진": ["사진", "포토", "인생샷", "야경", "감성"],
     "역사": ["역사", "박물관", "전시", "직지", "문화"],
@@ -57,17 +96,128 @@ TRANSPORT_SPEED_KMH = {
 CHEONGJU_LAT_RANGE = (36.40, 36.75)
 CHEONGJU_LNG_RANGE = (127.25, 127.65)
 
+LOCAL_FALLBACK_PLACES = [
+    {
+        "name": "청주동물원",
+        "category": "관광지",
+        "role": "activity",
+        "lat": 36.6499,
+        "lng": 127.5136,
+        "tags": ["동물", "사진", "산책", "자연"],
+        "score": 4.45,
+        "cost": 1000,
+        "indoor": False,
+        "stay_minutes": 90,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 상당구 명암로 171",
+    },
+    {
+        "name": "문암생태공원 반려견 놀이터",
+        "category": "공원",
+        "role": "walk",
+        "lat": 36.6764,
+        "lng": 127.4473,
+        "tags": ["동물", "반려견", "산책", "자연", "사진"],
+        "score": 4.35,
+        "cost": 0,
+        "indoor": False,
+        "stay_minutes": 70,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 무심서로 1097",
+    },
+    {
+        "name": "수암골 카페거리",
+        "category": "카페거리",
+        "role": "cafe",
+        "lat": 36.6429,
+        "lng": 127.4931,
+        "tags": ["카페", "디저트", "사진", "산책"],
+        "score": 4.25,
+        "cost": 7000,
+        "indoor": True,
+        "stay_minutes": 55,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 상당구 수암로 일대",
+    },
+    {
+        "name": "운리단길 카페거리",
+        "category": "카페거리",
+        "role": "cafe",
+        "lat": 36.6323,
+        "lng": 127.4574,
+        "tags": ["카페", "디저트", "사진", "산책"],
+        "score": 4.25,
+        "cost": 7000,
+        "indoor": True,
+        "stay_minutes": 55,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 운천동 일대",
+    },
+    {
+        "name": "성안길 카페거리",
+        "category": "카페거리",
+        "role": "cafe",
+        "lat": 36.6358,
+        "lng": 127.4890,
+        "tags": ["카페", "디저트", "사진", "쇼핑"],
+        "score": 4.2,
+        "cost": 7000,
+        "indoor": True,
+        "stay_minutes": 50,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 상당구 성안길 일대",
+    },
+    {
+        "name": "육거리종합시장",
+        "category": "시장",
+        "role": "meal",
+        "lat": 36.6288,
+        "lng": 127.4891,
+        "tags": ["맛집", "식사", "시장", "로컬"],
+        "score": 4.25,
+        "cost": 10000,
+        "indoor": True,
+        "stay_minutes": 65,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 상당구 석교동 일대",
+    },
+    {
+        "name": "서문시장 삼겹살거리",
+        "category": "시장",
+        "role": "meal",
+        "lat": 36.6336,
+        "lng": 127.4868,
+        "tags": ["맛집", "식사", "로컬"],
+        "score": 4.2,
+        "cost": 14000,
+        "indoor": True,
+        "stay_minutes": 70,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 상당구 서문동 일대",
+    },
+]
 
-def http_get(url: str, params: dict[str, str] | None = None, timeout: int = 12) -> bytes:
+LOW_PRIORITY_REPEATED_CAFE_NAMES = {"목욕탕 카페(카페목간)", "폴앤주비 카페"}
+
+
+def http_get(
+    url: str,
+    params: dict[str, str] | None = None,
+    timeout: int = 12,
+    headers: dict[str, str] | None = None,
+) -> bytes:
     target_url = url
     if params:
         target_url = f"{url}?{urllib.parse.urlencode(params, safe='%')}"
+    request_headers = {
+        "Accept": "application/json, application/xml, text/xml, */*",
+        "User-Agent": "CheongjuTripAgent/1.0",
+    }
+    if headers:
+        request_headers.update(headers)
     request = urllib.request.Request(
         target_url,
-        headers={
-            "Accept": "application/json, application/xml, text/xml, */*",
-            "User-Agent": "CheongjuTripAgent/1.0",
-        },
+        headers=request_headers,
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read()
@@ -158,13 +308,31 @@ def is_cheongju_place(name: str, address: str, admin_area: str, lat: float, lng:
 def infer_category(item: dict[str, Any], name: str, address: str, description: str) -> str:
     raw = first_text(item, ["tourSe", "cat3", "cat2", "cat1", "contenttypeid", "category", "type", "분류"])
     haystack = f"{name} {address} {description} {raw}"
-    if any(word in haystack for word in ["시장", "먹거리", "맛집", "음식", "식당"]):
+    name_text = name
+    if any(word in haystack for word in ["동물원", "반려견", "애견", "동물 체험", "펫"]):
+        return "관광지"
+    if any(word in name_text for word in ["박물관", "미술관", "전시관", "기념관", "체험관", "교육원", "공예관"]):
+        return "박물관"
+    if any(word in name_text for word in ["카페", "커피"]):
+        return "카페거리"
+    if any(word in name_text for word in ["성안길", "상권"]):
+        return "상권"
+    if "시장" in name_text:
         return "시장"
+    if any(word in name_text for word in ["공원", "수목원", "휴양림", "무심천"]):
+        return "공원"
+    if any(word in name_text for word in ["산", "걷기길", "트레킹", "산성", "댐", "전망대", "벚꽃길", "구곡"]):
+        return "관광지"
+
+    if any(word in haystack for word in ["성안길", "상권", "쇼핑"]):
+        return "상권"
     if any(word in haystack for word in ["박물관", "전시", "미술관", "기념관"]):
         return "박물관"
+    if any(word in haystack for word in ["시장", "먹거리", "맛집", "음식", "식당"]):
+        return "시장"
     if any(word in haystack for word in ["공원", "호수", "수목원", "자연휴양림"]):
         return "공원"
-    if any(word in haystack for word in ["거리", "상권", "카페"]):
+    if any(word in haystack for word in ["카페"]):
         return "카페거리"
     return "관광지"
 
@@ -172,7 +340,9 @@ def infer_category(item: dict[str, Any], name: str, address: str, description: s
 def infer_tags(category: str, name: str, address: str, description: str) -> list[str]:
     haystack = f"{category} {name} {address} {description}"
     tags = {"사진"}
-    if category in {"시장", "카페거리"} or any(word in haystack for word in ["맛집", "먹거리", "시장", "카페"]):
+    if any(word in haystack for word in ["동물", "동물원", "반려견", "애견", "강아지", "고양이", "펫"]):
+        tags.update(["동물", "산책", "자연"])
+    if category in {"맛집", "시장", "카페", "카페거리"} or any(word in haystack for word in ["맛집", "먹거리", "시장", "카페"]):
         tags.update(["맛집", "카페"])
     if category in {"박물관"} or any(word in haystack for word in ["박물관", "전시", "역사", "문화", "유적"]):
         tags.update(["역사", "실내"])
@@ -181,6 +351,83 @@ def infer_tags(category: str, name: str, address: str, description: str) -> list
     if category == "관광지":
         tags.update(["산책", "자연"])
     return sorted(tags)
+
+
+def place_role_for_category(category: str) -> str:
+    if category in {"맛집", "식당", "시장"}:
+        return "meal"
+    if category in {"카페", "카페거리"}:
+        return "cafe"
+    if category == "숙소":
+        return "lodging"
+    if category in {"공원"}:
+        return "walk"
+    return "activity"
+
+
+def role_label(role: str) -> str:
+    return {
+        "meal": "밥집",
+        "cafe": "카페",
+        "activity": "놀거리",
+        "walk": "산책/마무리",
+        "lodging": "숙소",
+    }.get(role, "장소")
+
+
+def normalize_kakao_place(item: dict[str, Any], query: str, role: str) -> dict[str, Any] | None:
+    name = first_text(item, ["place_name"])
+    address = first_text(item, ["road_address_name", "address_name"])
+    lat = first_float(item, ["y"])
+    lng = first_float(item, ["x"])
+    if not name or lat is None or lng is None:
+        return None
+    if not is_cheongju_place(name, address, "", lat, lng):
+        return None
+
+    kakao_category = first_text(item, ["category_group_name", "category_name"])
+    if role == "meal":
+        category = "맛집"
+        tags = ["맛집", "식사", "로컬"]
+        cost = 12000
+        stay_minutes = 60
+        indoor = True
+    elif role == "cafe":
+        category = "카페"
+        tags = ["카페", "디저트", "사진"]
+        cost = 7000
+        stay_minutes = 50
+        indoor = True
+    elif role == "lodging":
+        category = "숙소"
+        tags = ["실내", "숙소", "교통"]
+        cost = 40000
+        stay_minutes = 0
+        indoor = True
+    else:
+        category = infer_category({"category": kakao_category}, name, address, query)
+        tags = infer_tags(category, name, address, query)
+        cost = 10000 if category in {"카페거리", "상권", "시장"} else 0
+        stay_minutes = 80
+        indoor = "실내" in tags or category in {"박물관", "카페거리", "상권"}
+
+    return {
+        "name": name,
+        "category": category,
+        "role": role,
+        "lat": lat,
+        "lng": lng,
+        "tags": sorted(set(tags)),
+        "score": 4.4 if role in {"meal", "cafe"} else 4.2,
+        "cost": cost,
+        "indoor": indoor,
+        "stay_minutes": stay_minutes,
+        "source": "카카오 Local API",
+        "address": address,
+        "phone": first_text(item, ["phone"]),
+        "url": first_text(item, ["place_url"]),
+        "search_query": query,
+    }
 
 
 def normalize_place(item: dict[str, Any], source: str) -> dict[str, Any] | None:
@@ -205,6 +452,7 @@ def normalize_place(item: dict[str, Any], source: str) -> dict[str, Any] | None:
     return {
         "name": name,
         "category": category,
+        "role": place_role_for_category(category),
         "lat": lat,
         "lng": lng,
         "tags": tags,
@@ -225,35 +473,106 @@ def dedupe_places(places: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(deduped.values(), key=lambda place: place["name"])
 
 
-def save_place_db(places: list[dict[str, Any]], source: str) -> None:
+def save_place_db(
+    places: list[dict[str, Any]],
+    source: str,
+    errors: list[str] | None = None,
+    source_counts: dict[str, int] | None = None,
+) -> None:
     DATA_DIR.mkdir(exist_ok=True)
     payload = {
         "city": "청주",
         "source": source,
         "count": len(places),
+        "source_counts": source_counts or dict(sorted(source_counter(places).items())),
+        "sync_errors": errors or [],
         "places": places,
     }
     PLACE_DB_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def source_counter(places: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for place in places:
+        source = str(place.get("source", "")).strip() or "출처 없음"
+        counts[source] = counts.get(source, 0) + 1
+    return counts
+
+
+def source_summary(places: list[dict[str, Any]]) -> str:
+    sources = sorted(source_counter(places))
+    return " / ".join(sources) if sources else "로컬 JSON DB"
 
 
 def load_place_db() -> list[dict[str, Any]]:
     if not PLACE_DB_PATH.exists():
         return sync_place_db()
     payload = json.loads(PLACE_DB_PATH.read_text(encoding="utf-8"))
-    return payload.get("places", [])
+    return sanitize_place_db(payload.get("places", []) + LOCAL_FALLBACK_PLACES)
+
+
+def sanitize_place_db(places: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sanitized = []
+    for place in places:
+        name = str(place.get("name", "")).strip()
+        address = str(place.get("address", "")).strip()
+        lat = place.get("lat")
+        lng = place.get("lng")
+        if not name or lat is None or lng is None:
+            continue
+        if not is_cheongju_place(name, address, "", float(lat), float(lng)):
+            continue
+
+        category = infer_category({"category": place.get("category", "")}, name, address, "")
+        original_role = str(place.get("role", "")).strip()
+        if original_role in {"meal", "cafe", "lodging"}:
+            role = original_role
+            category = {"meal": "맛집", "cafe": "카페", "lodging": "숙소"}[role]
+            tags = {
+                "meal": ["맛집", "식사", "로컬"],
+                "cafe": ["카페", "디저트", "사진"],
+                "lodging": ["실내", "숙소", "교통"],
+            }[role]
+        else:
+            role = place_role_for_category(category)
+            tags = infer_tags(category, name, address, "")
+        tags = sorted(set(tags).union(str(tag).strip() for tag in place.get("tags", []) if str(tag).strip()))
+        sanitized.append(
+            {
+                **place,
+                "category": category,
+                "role": role,
+                "tags": tags,
+                "indoor": bool(place.get("indoor")) or "실내" in tags or category in {"박물관", "카페거리", "카페", "맛집", "상권", "숙소"},
+            }
+        )
+    return dedupe_places(sanitized)
 
 
 def sync_place_db() -> list[dict[str, Any]]:
     errors: list[str] = []
-    for source, fetcher in (("충청북도 관광명소정보 API", fetch_chungbuk_places), ("한국관광공사 TourAPI", fetch_tour_api_places)):
+    collected: list[dict[str, Any]] = []
+    source_counts: dict[str, int] = {}
+    fetchers = (
+        ("충청북도 관광명소정보 API", fetch_chungbuk_places),
+        ("한국관광공사 TourAPI", fetch_tour_api_places),
+        ("카카오 Local API", fetch_kakao_places),
+    )
+    for source, fetcher in fetchers:
         try:
             places = dedupe_places(fetcher())
             if places:
-                save_place_db(places, source)
-                return places
+                source_counts[source] = len(places)
+                collected.extend(places)
+                continue
             errors.append(f"{source}: 청주 장소 데이터 없음")
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, ET.ParseError, OSError) as error:
             errors.append(f"{source}: {error}")
+
+    collected = dedupe_places(collected + LOCAL_FALLBACK_PLACES)
+    if collected:
+        save_place_db(collected, source_summary(collected), errors, source_counter(collected))
+        return collected
 
     raise RuntimeError("청주 장소 데이터를 수집하지 못했습니다. " + " / ".join(errors))
 
@@ -291,6 +610,38 @@ def fetch_tour_api_places() -> list[dict[str, Any]]:
     raw = http_get(TOUR_API_BASE_URL, params)
     items = deep_find_items(parse_api_payload(raw))
     return [place for item in items if (place := normalize_place(item, "한국관광공사 TourAPI"))]
+
+
+def fetch_kakao_places() -> list[dict[str, Any]]:
+    if not KAKAO_REST_API_KEY:
+        return []
+
+    places: list[dict[str, Any]] = []
+    kakao_key = KAKAO_REST_API_KEY.strip()
+    authorization = kakao_key if kakao_key.startswith("KakaoAK ") else f"KakaoAK {kakao_key}"
+    headers = {"Authorization": authorization}
+    for query, role in KAKAO_KEYWORD_SEARCHES:
+        for page in range(1, 3):
+            raw = http_get(
+                KAKAO_LOCAL_API_URL,
+                {
+                    "query": query,
+                    "size": "15",
+                    "page": str(page),
+                },
+                headers=headers,
+            )
+            payload = parse_api_payload(raw)
+            documents = payload.get("documents", []) if isinstance(payload, dict) else []
+            places.extend(
+                place
+                for item in documents
+                if (place := normalize_kakao_place(item, query, role))
+            )
+            meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
+            if meta.get("is_end", True):
+                break
+    return places
 
 ACCOMMODATION_DB = [
     {
@@ -422,38 +773,424 @@ def indoor_preference_score(place: dict[str, Any], tags: list[str]) -> float:
     return 3.0 if place["indoor"] else -5.0
 
 
-def recommendation_tool(tags: list[str], budget: int, weather: str, duration: str) -> list[dict[str, Any]]:
+def start_proximity_score(distance_km: float, transport: str) -> float:
+    if transport == "도보 중심":
+        if distance_km <= 1.5:
+            return 4.5
+        if distance_km <= 3:
+            return 3.0
+        if distance_km <= 5:
+            return 1.0
+        if distance_km <= 8:
+            return -2.0
+        return max(-10.0, -distance_km * 0.55)
+
+    if transport == "자동차":
+        if distance_km <= 5:
+            return 0.8
+        if distance_km <= 20:
+            return 1.4
+        if distance_km <= 35:
+            return 0.6
+        return -1.0
+
+    if distance_km <= 3:
+        return 2.2
+    if distance_km <= 7:
+        return 1.4
+    if distance_km <= 12:
+        return 0.7
+    if distance_km <= 20:
+        return 0
+    return max(-4.0, -distance_km * 0.12)
+
+
+def category_preference_score(place: dict[str, Any], tags: list[str]) -> float:
+    category = place["category"]
+    score = 0.0
+    place_tags = set(place["tags"])
+    if "동물" in tags:
+        if "동물" in place_tags or any(word in place["name"] for word in ["동물원", "반려견", "애견"]):
+            score += 7.0
+        elif category in {"공원", "관광지"}:
+            score += 0.8
+    if "카페" in tags and category in {"카페", "카페거리", "상권"}:
+        score += 3.0
+    if "맛집" in tags and category in {"맛집", "시장", "상권", "카페거리"}:
+        score += 3.0
+    if "쇼핑" in tags and category in {"상권", "시장"}:
+        score += 2.6
+    if "역사" in tags and category in {"박물관", "관광지"}:
+        score += 2.6
+    if "산책" in tags and category in {"공원", "관광지"}:
+        score += 2.2
+    if "자연" in tags and category in {"공원", "관광지"}:
+        score += 2.2
+    return score
+
+
+def repeated_cafe_penalty(place: dict[str, Any]) -> float:
+    if place["name"] in LOW_PRIORITY_REPEATED_CAFE_NAMES:
+        return 4.0
+    if "목욕탕" in place["name"] and place["category"] in {"카페", "카페거리"}:
+        return 3.0
+    return 0.0
+
+
+def diversity_adjusted_selection(
+    ranked_places: list[dict[str, Any]],
+    target_count: int,
+    tags: list[str],
+    transport: str,
+    indoor_first: bool,
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    candidate_pool = ranked_places[: max(target_count * 5, 15)]
+
+    while candidate_pool and len(selected) < target_count:
+        best_place = max(
+            candidate_pool,
+            key=lambda place: diversity_candidate_score(place, selected, tags, transport, indoor_first),
+        )
+        selected.append(best_place)
+        candidate_pool.remove(best_place)
+
+    return selected
+
+
+def preferred_categories(tags: list[str], weather: str) -> set[str]:
+    categories: set[str] = set()
+    if "동물" in tags:
+        categories.update({"관광지", "공원", "카페", "카페거리"})
+    if {"맛집", "카페", "쇼핑"}.intersection(tags):
+        categories.update({"맛집", "카페", "시장", "상권", "카페거리"})
+    if "역사" in tags or "실내" in tags or weather == "비":
+        categories.update({"박물관", "카페", "카페거리", "상권", "맛집"})
+    if {"산책", "자연", "사진"}.intersection(tags):
+        categories.update({"공원", "관광지", "카페거리", "박물관"})
+    return categories
+
+
+def diversity_candidate_score(
+    place: dict[str, Any],
+    selected: list[dict[str, Any]],
+    tags: list[str],
+    transport: str,
+    indoor_first: bool,
+) -> float:
+    score = place["agent_score"]
+    same_category_count = sum(1 for item in selected if item["category"] == place["category"])
+    score -= same_category_count * 2.4
+
+    for item in selected:
+        distance = haversine_km(place, item)
+        if distance < 1.0:
+            score -= 2.2
+        elif distance < 2.5:
+            score -= 1.0
+        if transport == "도보 중심" and distance > 4.0:
+            score -= min(5.0, (distance - 4.0) * 0.9)
+        elif transport == "자동차" and distance > 8.0:
+            score += 0.6
+
+    selected_categories = {item["category"] for item in selected}
+    if selected and place["category"] not in selected_categories:
+        score += 1.4
+
+    if "카페" in tags and not any(item["category"] in {"카페", "카페거리", "상권"} for item in selected):
+        score += 2.0 if place["category"] in {"카페", "카페거리", "상권"} else 0
+    if "맛집" in tags and not any(item["category"] in {"맛집", "시장", "상권", "카페거리"} for item in selected):
+        score += 2.0 if place["category"] in {"맛집", "시장", "상권", "카페거리"} else 0
+    if {"산책", "자연"}.intersection(tags) and not any(item["category"] in {"공원", "관광지"} for item in selected):
+        score += 1.8 if place["category"] in {"공원", "관광지"} else 0
+    if "역사" in tags and not any(item["category"] == "박물관" for item in selected):
+        score += 1.8 if place["category"] == "박물관" else 0
+    if "동물" in tags and not any("동물" in item["tags"] for item in selected):
+        score += 6.0 if "동물" in place["tags"] else 0
+
+    if indoor_first and not place["indoor"]:
+        score -= 4.0
+
+    return score
+
+
+def transport_filtered_places(
+    ranked_places: list[dict[str, Any]],
+    target_count: int,
+    transport: str,
+) -> list[dict[str, Any]]:
+    if transport == "도보 중심":
+        for max_distance in (4, 6, 8, 12):
+            nearby = [place for place in ranked_places if place["start_distance_km"] <= max_distance]
+            if len(nearby) >= target_count:
+                return nearby
+    elif transport == "대중교통":
+        for max_distance in (10, 15, 22):
+            reachable = [place for place in ranked_places if place["start_distance_km"] <= max_distance]
+            if len(reachable) >= target_count:
+                return reachable
+    return ranked_places
+
+
+def itinerary_slots(duration: str) -> list[dict[str, Any]]:
+    if duration == "1박 2일":
+        return [
+            {"day": 1, "role": "meal", "label": "점심"},
+            {"day": 1, "role": "activity", "label": "놀거리"},
+            {"day": 1, "role": "activity", "label": "놀거리"},
+            {"day": 1, "role": "cafe", "label": "카페"},
+            {"day": 1, "role": "meal", "label": "저녁"},
+            {"day": 2, "role": "meal", "label": "아침/브런치"},
+            {"day": 2, "role": "activity", "label": "놀거리"},
+            {"day": 2, "role": "cafe", "label": "카페"},
+        ]
+    return [
+        {"day": 1, "role": "meal", "label": "밥집"},
+        {"day": 1, "role": "activity", "label": "놀거리"},
+        {"day": 1, "role": "cafe", "label": "카페"},
+        {"day": 1, "role": "activity", "label": "놀거리"},
+        {"day": 1, "role": "walk", "label": "산책/마무리"},
+    ]
+
+
+def role_matches(place: dict[str, Any], role: str) -> bool:
+    place_role = place.get("role") or place_role_for_category(place["category"])
+    if role == "meal":
+        return place_role == "meal" or place["category"] in {"맛집", "시장", "상권", "카페거리"}
+    if role == "cafe":
+        return place_role == "cafe" or place["category"] in {"카페", "카페거리", "상권"}
+    if role == "walk":
+        return place_role == "walk" or place["category"] in {"공원", "관광지"} or "산책" in place["tags"]
+    if role == "activity":
+        return place_role in {"activity", "walk"} or place["category"] in {"관광지", "박물관", "공원", "상권"} or "동물" in place["tags"]
+    return place_role == role
+
+
+def enforce_preferred_tag(
+    selected: list[dict[str, Any]],
+    ranked_places: list[dict[str, Any]],
+    tags: list[str],
+) -> list[dict[str, Any]]:
+    if "동물" not in tags or any("동물" in place["tags"] for place in selected):
+        return selected
+
+    selected_names = {place["name"] for place in selected}
+    animal_candidate = next(
+        (place for place in ranked_places if "동물" in place["tags"] and place["name"] not in selected_names),
+        None,
+    )
+    if not animal_candidate:
+        return selected
+
+    replace_index = next(
+        (
+            index
+            for index, place in enumerate(selected)
+            if place.get("slot_role") in {"activity", "walk", "cafe"} and not place["matched_tags"]
+        ),
+        len(selected) - 1,
+    )
+    slot_role = selected[replace_index].get("slot_role", animal_candidate.get("role"))
+    slot_label = selected[replace_index].get("slot_label", role_label(slot_role))
+    day = selected[replace_index].get("day", 1)
+    selected[replace_index] = {
+        **animal_candidate,
+        "matched_tags": sorted(set(tags).intersection(animal_candidate["tags"])),
+        "slot_role": slot_role,
+        "slot_label": slot_label,
+        "day": day,
+        "agent_score": round(animal_candidate.get("agent_score", animal_candidate["score"]) + 3.0, 2),
+    }
+    return selected
+
+
+def slot_candidate_score(
+    place: dict[str, Any],
+    slot: dict[str, Any],
+    current: dict[str, float],
+    selected: list[dict[str, Any]],
+    tags: list[str],
+    transport: str,
+    per_place_budget: float,
+    weather: str,
+) -> float:
+    matched_tags = sorted(set(tags).intersection(place["tags"]))
+    current_distance = haversine_km(current, place)
+    duplicate_category_count = sum(1 for item in selected if item["category"] == place["category"])
+    budget_penalty = 1.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
+    place_role = place.get("role") or place_role_for_category(place["category"])
+    if place_role == slot["role"]:
+        role_bonus = 14.0
+    elif role_matches(place, slot["role"]):
+        role_bonus = 2.0
+    else:
+        role_bonus = -5.0
+
+    return (
+        place["score"]
+        + role_bonus
+        + len(matched_tags) * 1.8
+        + weather_filter_score(place, weather)
+        + indoor_preference_score(place, tags)
+        + category_preference_score(place, tags)
+        + start_proximity_score(place.get("start_distance_km", current_distance), transport)
+        - route_candidate_cost(current, place, selected, transport) * 0.35
+        - duplicate_category_count * 1.2
+        - budget_penalty
+        - repeated_cafe_penalty(place)
+    )
+
+
+def select_place_for_slot(
+    places: list[dict[str, Any]],
+    slot: dict[str, Any],
+    current: dict[str, float],
+    selected: list[dict[str, Any]],
+    tags: list[str],
+    transport: str,
+    per_place_budget: float,
+    weather: str,
+) -> dict[str, Any] | None:
+    selected_names = {place["name"] for place in selected}
+    candidates = [
+        place
+        for place in places
+        if place["name"] not in selected_names and role_matches(place, slot["role"])
+    ]
+    if not candidates and slot["role"] == "walk":
+        candidates = [
+            place
+            for place in places
+            if place["name"] not in selected_names and role_matches(place, "activity")
+        ]
+    if not candidates:
+        return None
+
+    chosen = max(
+        candidates,
+        key=lambda place: slot_candidate_score(
+            place,
+            slot,
+            current,
+            selected,
+            tags,
+            transport,
+            per_place_budget,
+            weather,
+        ),
+    )
+    matched_tags = sorted(set(tags).intersection(chosen["tags"]))
+    return {
+        **chosen,
+        "matched_tags": matched_tags,
+        "slot_role": slot["role"],
+        "slot_label": slot["label"],
+        "day": slot["day"],
+        "agent_score": round(
+            slot_candidate_score(
+                chosen,
+                slot,
+                current,
+                selected,
+                tags,
+                transport,
+                per_place_budget,
+                weather,
+            ),
+            2,
+        ),
+    }
+
+
+def recommendation_tool(
+    tags: list[str],
+    budget: int,
+    weather: str,
+    duration: str,
+    start_point: dict[str, float],
+    transport: str,
+) -> list[dict[str, Any]]:
     places = []
-    target_count = 6 if duration == "1박 2일" else 5
+    slots = itinerary_slots(duration)
+    if transport == "도보 중심" and duration == "당일치기":
+        slots = slots[:4]
+    target_count = len(slots)
     per_place_budget = budget / target_count
-    indoor_first = "실내" in tags or weather == "비"
     place_db = load_place_db()
 
     for place in place_db:
         matched_tags = sorted(set(tags).intersection(place["tags"]))
         budget_penalty = 1.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
+        start_distance = haversine_km(start_point, place)
         score = (
             place["score"]
             + len(matched_tags) * 2
             + weather_filter_score(place, weather)
             + indoor_preference_score(place, tags)
+            + category_preference_score(place, tags)
+            + start_proximity_score(start_distance, transport)
             - budget_penalty
+            - repeated_cafe_penalty(place)
         )
-        places.append({**place, "matched_tags": matched_tags, "agent_score": round(score, 2)})
+        places.append(
+            {
+                **place,
+                "matched_tags": matched_tags,
+                "start_distance_km": round(start_distance, 2),
+                "role": place.get("role") or place_role_for_category(place["category"]),
+                "agent_score": round(score, 2),
+            }
+        )
 
-    ranked_places = sorted(places, key=lambda item: item["agent_score"], reverse=True)
-    if indoor_first:
-        indoor_places = [place for place in ranked_places if place["indoor"]]
-        selected = indoor_places[:target_count]
-    else:
-        selected = ranked_places[:target_count]
-    return balance_categories(selected, places, target_count, indoor_first)
+    ranked_places = sorted(
+        places,
+        key=lambda item: (item["agent_score"], -item["start_distance_km"]),
+        reverse=True,
+    )
+    preferred = preferred_categories(tags, weather)
+    preferred_ranked_places = [place for place in ranked_places if place["category"] in preferred]
+    slot_roles = {slot["role"] for slot in slots}
+    keeps_slot_coverage = all(
+        any(role_matches(place, role) for place in preferred_ranked_places)
+        for role in slot_roles
+    )
+    if len(preferred_ranked_places) >= target_count and keeps_slot_coverage:
+        ranked_places = preferred_ranked_places
+    all_ranked_places = ranked_places
+    ranked_places = transport_filtered_places(ranked_places, target_count, transport)
+    if "동물" in tags:
+        ranked_names = {place["name"] for place in ranked_places}
+        ranked_places.extend(
+            place
+            for place in all_ranked_places
+            if "동물" in place["tags"] and place["name"] not in ranked_names
+        )
+
+    selected: list[dict[str, Any]] = []
+    current = start_point
+    for slot in slots:
+        chosen = select_place_for_slot(
+            ranked_places,
+            slot,
+            current,
+            selected,
+            tags,
+            transport,
+            per_place_budget,
+            weather,
+        )
+        if chosen:
+            selected.append(chosen)
+            current = chosen
+
+    return enforce_preferred_tag(selected, ranked_places, tags)
 
 
 def balance_categories(
     selected: list[dict[str, Any]],
     all_places: list[dict[str, Any]],
     target_count: int,
+    tags: list[str],
     indoor_first: bool = False,
 ) -> list[dict[str, Any]]:
     if not selected:
@@ -461,22 +1198,30 @@ def balance_categories(
     if indoor_first:
         return selected[:target_count]
 
+    wants_food = bool({"맛집", "카페", "쇼핑"}.intersection(tags))
+    wants_culture = "역사" in tags
+    wants_walk = bool({"산책", "자연", "사진"}.intersection(tags))
+
     has_food = any(place["category"] in ["시장", "상권", "카페거리"] for place in selected)
-    has_culture = any(place["category"] in ["관광지", "박물관"] for place in selected)
+    has_culture = any(place["category"] in ["박물관"] for place in selected)
     has_walk = any("산책" in place["tags"] or place["category"] == "공원" for place in selected)
 
     required_categories = []
-    if not has_food:
+    if wants_food and not has_food:
         required_categories.append(["시장", "상권", "카페거리"])
-    if not has_culture:
-        required_categories.append(["관광지", "박물관"])
-    if not has_walk:
-        required_categories.append(["산책", "공원"])
+    if wants_culture and not has_culture:
+        required_categories.append(["박물관"])
+    if wants_walk and not has_walk:
+        required_categories.append(["공원", "관광지"])
 
     names = {place["name"] for place in selected}
     for categories in required_categories:
         candidate = next(
-            (place for place in sorted(all_places, key=lambda item: item["agent_score"], reverse=True)
+            (place for place in sorted(
+                all_places,
+                key=lambda item: (item["agent_score"], -item.get("start_distance_km", 0)),
+                reverse=True,
+            )
              if place["category"] in categories and place["name"] not in names),
             None,
         )
@@ -497,13 +1242,34 @@ def haversine_km(a: dict[str, float], b: dict[str, float]) -> float:
     return 2 * radius * math.asin(math.sqrt(h))
 
 
-def optimize_route_tool(start_point: dict[str, float], places: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def route_candidate_cost(
+    current: dict[str, float],
+    place: dict[str, Any],
+    route: list[dict[str, Any]],
+    transport: str,
+) -> float:
+    distance = haversine_km(current, place)
+    if transport == "도보 중심":
+        return distance + max(0, distance - 2.5) * 1.5
+    if transport == "자동차":
+        return distance - (0.25 if route and place["category"] not in {item["category"] for item in route} else 0)
+    return distance + max(0, distance - 8.0) * 0.25
+
+
+def optimize_route_tool(
+    start_point: dict[str, float],
+    places: list[dict[str, Any]],
+    transport: str,
+) -> list[dict[str, Any]]:
     route = []
     remaining = places[:]
     current = start_point
 
     while remaining:
-        next_place = min(remaining, key=lambda place: haversine_km(current, place))
+        next_place = min(
+            remaining,
+            key=lambda place: route_candidate_cost(current, place, route, transport),
+        )
         route.append(next_place)
         remaining.remove(next_place)
         current = next_place
@@ -511,13 +1277,25 @@ def optimize_route_tool(start_point: dict[str, float], places: list[dict[str, An
     return route
 
 
-def distance_tool(start_point: dict[str, float], route: list[dict[str, Any]], transport: str) -> list[dict[str, Any]]:
+def distance_tool(
+    start_point: dict[str, float],
+    route: list[dict[str, Any]],
+    transport: str,
+    accommodation: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     speed = TRANSPORT_SPEED_KMH[transport]
     legs = []
     current_name = "출발지"
     current = start_point
+    current_day = 1
 
     for place in route:
+        place_day = int(place.get("day", 1))
+        if accommodation and place_day != current_day:
+            current_name = accommodation["name"]
+            current = accommodation
+            current_day = place_day
+
         distance = haversine_km(current, place)
         move_minutes = max(5, round(distance / speed * 60))
         legs.append(
@@ -542,7 +1320,8 @@ def accommodation_tool(
     if state.duration != "1박 2일":
         return None
 
-    day1_last_place = route[max(0, len(route) // 2 - 1)] if route else state.start_point
+    day1_places = [place for place in route if place.get("day", 1) == 1]
+    day1_last_place = day1_places[-1] if day1_places else (route[0] if route else state.start_point)
     remaining_budget = max(0, state.budget - place_cost)
 
     candidates = []
@@ -572,28 +1351,31 @@ def build_schedule(
     start_hour = 10
     current_minutes = start_hour * 60
     schedule = []
-    split_index = math.ceil(len(route) / 2) if duration == "1박 2일" else len(route)
+    previous_day = 1
 
     for index, place in enumerate(route):
-        if duration == "1박 2일" and index == split_index:
+        day = int(place.get("day", 1))
+        if duration == "1박 2일" and day != previous_day:
             current_minutes = 10 * 60
+            previous_day = day
         current_minutes += legs[index]["move_minutes"]
         start = format_time(current_minutes)
         current_minutes += place["stay_minutes"]
         end = format_time(current_minutes)
         schedule.append(
             {
-                "day": 2 if duration == "1박 2일" and index >= split_index else 1,
+                "day": day,
                 "time": f"{start} - {end}",
                 "place": place["name"],
-                "category": place["category"],
+                "category": place.get("slot_label", place["category"]),
                 "reason": build_reason(place),
                 "cost": place["cost"],
                 "indoor": place["indoor"],
             }
         )
 
-        if duration == "1박 2일" and accommodation and index == split_index - 1:
+        next_day = int(route[index + 1].get("day", day)) if index + 1 < len(route) else day
+        if duration == "1박 2일" and accommodation and day == 1 and next_day == 2:
             schedule.append(
                 {
                     "day": 1,
@@ -620,13 +1402,21 @@ def format_time(total_minutes: int) -> str:
 
 def build_reason(place: dict[str, Any]) -> str:
     matched = ", ".join(place["matched_tags"]) if place["matched_tags"] else "균형 일정"
+    slot = place.get("slot_label")
     weather_note = "실내" if place["indoor"] else "야외"
+    if slot:
+        return f"{slot} 슬롯에 맞춰 선택했고, {matched} 선호와 맞는 {weather_note} 장소입니다."
     return f"{matched} 선호와 맞고, {weather_note} 일정으로 활용하기 좋습니다."
 
 
-def output_parser(state: AgentState, route: list[dict[str, Any]], legs: list[dict[str, Any]]) -> dict[str, Any]:
+def output_parser(
+    state: AgentState,
+    route: list[dict[str, Any]],
+    legs: list[dict[str, Any]],
+    accommodation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     place_cost = sum(place["cost"] for place in route)
-    accommodation = accommodation_tool(state, route, place_cost)
+    accommodation = accommodation if accommodation is not None else accommodation_tool(state, route, place_cost)
     lodging_cost = accommodation["cost"] if accommodation else 0
     total_cost = place_cost + lodging_cost
     total_distance = round(sum(leg["distance_km"] for leg in legs), 2)
@@ -643,7 +1433,7 @@ def output_parser(state: AgentState, route: list[dict[str, Any]], legs: list[dic
     )
     route_names = [state.start_name] + [place["name"] for place in route]
     if accommodation:
-        split_index = math.ceil(len(route) / 2)
+        split_index = next((index for index, place in enumerate(route) if place.get("day", 1) == 2), len(route))
         route_names = (
             [state.start_name]
             + [place["name"] for place in route[:split_index]]
@@ -676,10 +1466,17 @@ def output_parser(state: AgentState, route: list[dict[str, Any]], legs: list[dic
                 "score": place["agent_score"],
                 "tags": place["tags"],
                 "matched_tags": place["matched_tags"],
+                "slot_role": place.get("slot_role"),
+                "slot_label": place.get("slot_label"),
+                "day": place.get("day", 1),
                 "cost": place["cost"],
                 "indoor": place["indoor"],
                 "lat": place["lat"],
                 "lng": place["lng"],
+                "start_distance_km": place.get("start_distance_km"),
+                "address": place.get("address"),
+                "phone": place.get("phone"),
+                "url": place.get("url"),
             }
             for place in route
         ],
@@ -690,7 +1487,9 @@ def output_parser(state: AgentState, route: list[dict[str, Any]], legs: list[dic
             "개인정보 제거 Middleware",
             "Fallback Middleware",
             "여행 스타일 분석 Tool",
-            "청주 장소 자동 추천 Tool",
+            "카테고리 슬롯 생성 Tool",
+            "밥집/카페/놀거리 슬롯별 추천 Tool",
+            "이동수단별 후보 필터 Tool",
             "로컬 JSON 장소 DB",
             "날씨 대응 Tool",
             "거리 계산 Tool",
@@ -828,7 +1627,14 @@ def run_agent(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
     assert state is not None
     state.tags = style_analysis_tool(state.style_text)
     try:
-        recommended = recommendation_tool(state.tags, state.budget, state.weather, state.duration)
+        recommended = recommendation_tool(
+            state.tags,
+            state.budget,
+            state.weather,
+            state.duration,
+            state.start_point,
+            state.transport,
+        )
     except RuntimeError as error:
         return {
             "errors": [
@@ -848,9 +1654,10 @@ def run_agent(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
             ]
         }, 503
 
-    route = optimize_route_tool(state.start_point, recommended)
-    legs = distance_tool(state.start_point, route, state.transport)
-    return output_parser(state, route, legs), 200
+    route = recommended
+    accommodation = accommodation_tool(state, route, sum(place["cost"] for place in route))
+    legs = distance_tool(state.start_point, route, state.transport, accommodation)
+    return output_parser(state, route, legs, accommodation), 200
 
 
 @app.get("/")
@@ -870,7 +1677,17 @@ def sync_places():
         places = sync_place_db()
     except RuntimeError as error:
         return jsonify({"errors": [str(error)]}), 503
-    return jsonify({"count": len(places), "db_path": str(PLACE_DB_PATH), "places": places})
+    payload = json.loads(PLACE_DB_PATH.read_text(encoding="utf-8"))
+    return jsonify(
+        {
+            "count": len(places),
+            "db_path": str(PLACE_DB_PATH),
+            "source": payload.get("source"),
+            "source_counts": payload.get("source_counts", {}),
+            "sync_errors": payload.get("sync_errors", []),
+            "places": places,
+        }
+    )
 
 
 if __name__ == "__main__":

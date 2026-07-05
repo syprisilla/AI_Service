@@ -213,7 +213,10 @@
             <article class="place-card">
               <div>
                 <h4>${place.name}</h4>
-                <p>${place.category} · Agent Score ${place.score}</p>
+                <p>${place.slot_label || place.category} · ${place.category} · Agent Score ${place.score}</p>
+                ${place.address ? `<p>${place.address}</p>` : ""}
+                ${place.phone ? `<p>${place.phone}</p>` : ""}
+                ${place.url ? `<a href="${place.url}" target="_blank" rel="noreferrer">카카오맵에서 보기</a>` : ""}
               </div>
               <div class="chips">
                 ${place.tags.map((tag) => `<span>${tag}</span>`).join("")}
