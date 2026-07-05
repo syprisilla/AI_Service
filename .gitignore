@@ -24,6 +24,7 @@ ENV/
 *.log
 server.out.log
 server.err.log
+data/*.json
 
 # Editor and local tool metadata
 .vscode/

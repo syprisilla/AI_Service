@@ -4,9 +4,12 @@ import math
 import json
 import os
 import re
+import xml.etree.ElementTree as ET
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from flask import Flask, jsonify, render_template, request
@@ -15,120 +18,17 @@ from flask import Flask, jsonify, render_template, request
 app = Flask(__name__)
 
 
-PLACE_DB = {
-    "청주": [
-        {
-            "name": "수암골",
-            "category": "관광지",
-            "lat": 36.6486,
-            "lng": 127.4925,
-            "tags": ["사진", "산책", "카페", "야경"],
-            "score": 4.6,
-            "cost": 0,
-            "indoor": False,
-            "stay_minutes": 80,
-        },
-        {
-            "name": "청주 성안길",
-            "category": "상권",
-            "lat": 36.6355,
-            "lng": 127.4893,
-            "tags": ["맛집", "쇼핑", "카페", "실내"],
-            "score": 4.5,
-            "cost": 10000,
-            "indoor": True,
-            "stay_minutes": 90,
-        },
-        {
-            "name": "청남대",
-            "category": "관광지",
-            "lat": 36.4626,
-            "lng": 127.4906,
-            "tags": ["자연", "산책", "역사", "사진"],
-            "score": 4.7,
-            "cost": 6000,
-            "indoor": False,
-            "stay_minutes": 150,
-        },
-        {
-            "name": "상당산성",
-            "category": "관광지",
-            "lat": 36.6617,
-            "lng": 127.5384,
-            "tags": ["역사", "산책", "자연", "사진"],
-            "score": 4.6,
-            "cost": 0,
-            "indoor": False,
-            "stay_minutes": 120,
-        },
-        {
-            "name": "국립청주박물관",
-            "category": "박물관",
-            "lat": 36.6497,
-            "lng": 127.5120,
-            "tags": ["역사", "실내", "전시", "비오는날"],
-            "score": 4.4,
-            "cost": 0,
-            "indoor": True,
-            "stay_minutes": 90,
-        },
-        {
-            "name": "운리단길",
-            "category": "카페거리",
-            "lat": 36.6376,
-            "lng": 127.4604,
-            "tags": ["카페", "맛집", "사진", "데이트"],
-            "score": 4.4,
-            "cost": 8000,
-            "indoor": True,
-            "stay_minutes": 80,
-        },
-        {
-            "name": "무심천",
-            "category": "산책",
-            "lat": 36.6383,
-            "lng": 127.4747,
-            "tags": ["산책", "자연", "벚꽃", "무료"],
-            "score": 4.3,
-            "cost": 0,
-            "indoor": False,
-            "stay_minutes": 60,
-        },
-        {
-            "name": "청주고인쇄박물관",
-            "category": "박물관",
-            "lat": 36.6461,
-            "lng": 127.4716,
-            "tags": ["역사", "실내", "전시", "직지"],
-            "score": 4.3,
-            "cost": 0,
-            "indoor": True,
-            "stay_minutes": 80,
-        },
-        {
-            "name": "청주 육거리시장",
-            "category": "시장",
-            "lat": 36.6295,
-            "lng": 127.4892,
-            "tags": ["맛집", "시장", "먹거리", "로컬"],
-            "score": 4.4,
-            "cost": 10000,
-            "indoor": False,
-            "stay_minutes": 70,
-        },
-        {
-            "name": "오송호수공원",
-            "category": "공원",
-            "lat": 36.6286,
-            "lng": 127.3297,
-            "tags": ["산책", "자연", "사진", "무료"],
-            "score": 4.2,
-            "cost": 0,
-            "indoor": False,
-            "stay_minutes": 70,
-        },
-    ]
-}
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+PLACE_DB_PATH = DATA_DIR / "cheongju_places.json"
+CHUNGBUK_TOUR_API_URL = os.getenv(
+    "CHUNGBUK_TOUR_API_URL",
+    "https://tour.chungbuk.go.kr/openapi/tourInfo/attr.do",
+)
+TOUR_API_BASE_URL = "https://apis.data.go.kr/B551011/KorService1/areaBasedList1"
+TOUR_API_KEY = os.getenv("TOUR_API_KEY") or os.getenv("TOURAPI_SERVICE_KEY")
+TOUR_API_AREA_CODE = os.getenv("TOUR_API_AREA_CODE", "33")
+TOUR_API_SIGUNGU_CODE = os.getenv("TOUR_API_SIGUNGU_CODE", "10")
 
 START_POINTS = {
     "청주고속버스터미널": {"lat": 36.6260, "lng": 127.4317},
@@ -153,6 +53,244 @@ TRANSPORT_SPEED_KMH = {
     "대중교통": 18,
     "자동차": 35,
 }
+
+CHEONGJU_LAT_RANGE = (36.40, 36.75)
+CHEONGJU_LNG_RANGE = (127.25, 127.65)
+
+
+def http_get(url: str, params: dict[str, str] | None = None, timeout: int = 12) -> bytes:
+    target_url = url
+    if params:
+        target_url = f"{url}?{urllib.parse.urlencode(params, safe='%')}"
+    request = urllib.request.Request(
+        target_url,
+        headers={
+            "Accept": "application/json, application/xml, text/xml, */*",
+            "User-Agent": "CheongjuTripAgent/1.0",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def parse_api_payload(raw: bytes) -> Any:
+    text = raw.decode("utf-8-sig", errors="replace").strip()
+    if not text:
+        return {}
+    if text.startswith("{") or text.startswith("["):
+        return json.loads(text)
+    return xml_to_dict(ET.fromstring(text))
+
+
+def xml_to_dict(element: ET.Element) -> Any:
+    children = list(element)
+    if not children:
+        return element.text.strip() if element.text else ""
+
+    grouped: dict[str, Any] = {}
+    for child in children:
+        value = xml_to_dict(child)
+        if child.tag in grouped:
+            if not isinstance(grouped[child.tag], list):
+                grouped[child.tag] = [grouped[child.tag]]
+            grouped[child.tag].append(value)
+        else:
+            grouped[child.tag] = value
+    return grouped
+
+
+def deep_find_items(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, list):
+        items: list[dict[str, Any]] = []
+        for entry in data:
+            items.extend(deep_find_items(entry))
+        return items
+    if not isinstance(data, dict):
+        return []
+
+    for key in ("item", "items", "list", "data", "body", "response", "result"):
+        value = data.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            nested = deep_find_items(value)
+            if nested:
+                return nested
+
+    if any(key.lower() in {"title", "name", "addr1", "mapx", "mapy"} for key in data):
+        return [data]
+
+    items = []
+    for value in data.values():
+        items.extend(deep_find_items(value))
+    return items
+
+
+def first_text(item: dict[str, Any], keys: list[str]) -> str:
+    lowered = {str(key).lower(): value for key, value in item.items()}
+    for key in keys:
+        value = lowered.get(key.lower())
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+
+def first_float(item: dict[str, Any], keys: list[str]) -> float | None:
+    value = first_text(item, keys)
+    if not value:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def is_cheongju_place(name: str, address: str, admin_area: str, lat: float, lng: float) -> bool:
+    if admin_area:
+        return "청주" in admin_area
+    if address:
+        return "청주" in address
+    if "청주" in name:
+        return True
+    return CHEONGJU_LAT_RANGE[0] <= lat <= CHEONGJU_LAT_RANGE[1] and CHEONGJU_LNG_RANGE[0] <= lng <= CHEONGJU_LNG_RANGE[1]
+
+
+def infer_category(item: dict[str, Any], name: str, address: str, description: str) -> str:
+    raw = first_text(item, ["tourSe", "cat3", "cat2", "cat1", "contenttypeid", "category", "type", "분류"])
+    haystack = f"{name} {address} {description} {raw}"
+    if any(word in haystack for word in ["시장", "먹거리", "맛집", "음식", "식당"]):
+        return "시장"
+    if any(word in haystack for word in ["박물관", "전시", "미술관", "기념관"]):
+        return "박물관"
+    if any(word in haystack for word in ["공원", "호수", "수목원", "자연휴양림"]):
+        return "공원"
+    if any(word in haystack for word in ["거리", "상권", "카페"]):
+        return "카페거리"
+    return "관광지"
+
+
+def infer_tags(category: str, name: str, address: str, description: str) -> list[str]:
+    haystack = f"{category} {name} {address} {description}"
+    tags = {"사진"}
+    if category in {"시장", "카페거리"} or any(word in haystack for word in ["맛집", "먹거리", "시장", "카페"]):
+        tags.update(["맛집", "카페"])
+    if category in {"박물관"} or any(word in haystack for word in ["박물관", "전시", "역사", "문화", "유적"]):
+        tags.update(["역사", "실내"])
+    if category in {"공원"} or any(word in haystack for word in ["공원", "호수", "산", "숲", "둘레길", "산책"]):
+        tags.update(["자연", "산책"])
+    if category == "관광지":
+        tags.update(["산책", "자연"])
+    return sorted(tags)
+
+
+def normalize_place(item: dict[str, Any], source: str) -> dict[str, Any] | None:
+    name = first_text(item, ["title", "name", "placeName", "tourNm", "attrNm", "관광지명", "명칭"])
+    address = first_text(item, ["addr1", "addr", "address", "adres", "roadAddr", "newAddr", "주소"])
+    admin_area = first_text(item, ["areaSe", "sigungu", "sigunguName", "시군구"])
+    description = first_text(item, ["overview", "summary", "content", "description", "desc", "intrcn", "설명"])
+    lat = first_float(item, ["mapy", "lat", "latitude", "y", "위도"])
+    lng = first_float(item, ["mapx", "lng", "lon", "longitude", "x", "경도"])
+
+    if not name or lat is None or lng is None:
+        return None
+    if not is_cheongju_place(name, address, admin_area, lat, lng):
+        return None
+
+    category = infer_category(item, name, address, description)
+    tags = infer_tags(category, name, address, description)
+    indoor = "실내" in tags or category in {"박물관", "카페거리"}
+    cost = 8000 if category in {"시장", "카페거리"} else 0
+    stay_minutes = 90 if category in {"관광지", "박물관"} else 70
+
+    return {
+        "name": name,
+        "category": category,
+        "lat": lat,
+        "lng": lng,
+        "tags": tags,
+        "score": 4.2,
+        "cost": cost,
+        "indoor": indoor,
+        "stay_minutes": stay_minutes,
+        "source": source,
+        "address": address,
+    }
+
+
+def dedupe_places(places: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: dict[str, dict[str, Any]] = {}
+    for place in places:
+        key = re.sub(r"\s+", "", place["name"]).lower()
+        deduped.setdefault(key, place)
+    return sorted(deduped.values(), key=lambda place: place["name"])
+
+
+def save_place_db(places: list[dict[str, Any]], source: str) -> None:
+    DATA_DIR.mkdir(exist_ok=True)
+    payload = {
+        "city": "청주",
+        "source": source,
+        "count": len(places),
+        "places": places,
+    }
+    PLACE_DB_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_place_db() -> list[dict[str, Any]]:
+    if not PLACE_DB_PATH.exists():
+        return sync_place_db()
+    payload = json.loads(PLACE_DB_PATH.read_text(encoding="utf-8"))
+    return payload.get("places", [])
+
+
+def sync_place_db() -> list[dict[str, Any]]:
+    errors: list[str] = []
+    for source, fetcher in (("충청북도 관광명소정보 API", fetch_chungbuk_places), ("한국관광공사 TourAPI", fetch_tour_api_places)):
+        try:
+            places = dedupe_places(fetcher())
+            if places:
+                save_place_db(places, source)
+                return places
+            errors.append(f"{source}: 청주 장소 데이터 없음")
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, ET.ParseError, OSError) as error:
+            errors.append(f"{source}: {error}")
+
+    raise RuntimeError("청주 장소 데이터를 수집하지 못했습니다. " + " / ".join(errors))
+
+
+def fetch_chungbuk_places() -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    page_unit = 100
+    for page_index in range(1, 6):
+        raw = http_get(
+            CHUNGBUK_TOUR_API_URL,
+            {"pageUnit": str(page_unit), "pageIndex": str(page_index)},
+        )
+        page_items = deep_find_items(parse_api_payload(raw))
+        items.extend(page_items)
+        if len(page_items) < page_unit:
+            break
+    return [place for item in items if (place := normalize_place(item, "충청북도 관광명소정보 API"))]
+
+
+def fetch_tour_api_places() -> list[dict[str, Any]]:
+    if not TOUR_API_KEY:
+        return []
+    params = {
+        "serviceKey": TOUR_API_KEY,
+        "MobileOS": "ETC",
+        "MobileApp": "CheongjuTripAgent",
+        "_type": "json",
+        "numOfRows": "100",
+        "pageNo": "1",
+        "areaCode": TOUR_API_AREA_CODE,
+        "sigunguCode": TOUR_API_SIGUNGU_CODE,
+        "arrange": "A",
+        "contentTypeId": "12",
+    }
+    raw = http_get(TOUR_API_BASE_URL, params)
+    items = deep_find_items(parse_api_payload(raw))
+    return [place for item in items if (place := normalize_place(item, "한국관광공사 TourAPI"))]
 
 ACCOMMODATION_DB = [
     {
@@ -289,8 +427,9 @@ def recommendation_tool(tags: list[str], budget: int, weather: str, duration: st
     target_count = 6 if duration == "1박 2일" else 5
     per_place_budget = budget / target_count
     indoor_first = "실내" in tags or weather == "비"
+    place_db = load_place_db()
 
-    for place in PLACE_DB["청주"]:
+    for place in place_db:
         matched_tags = sorted(set(tags).intersection(place["tags"]))
         budget_penalty = 1.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
         score = (
@@ -317,6 +456,8 @@ def balance_categories(
     target_count: int,
     indoor_first: bool = False,
 ) -> list[dict[str, Any]]:
+    if not selected:
+        return []
     if indoor_first:
         return selected[:target_count]
 
@@ -550,6 +691,7 @@ def output_parser(state: AgentState, route: list[dict[str, Any]], legs: list[dic
             "Fallback Middleware",
             "여행 스타일 분석 Tool",
             "청주 장소 자동 추천 Tool",
+            "로컬 JSON 장소 DB",
             "날씨 대응 Tool",
             "거리 계산 Tool",
             "동선 최적화 Tool",
@@ -685,7 +827,27 @@ def run_agent(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
 
     assert state is not None
     state.tags = style_analysis_tool(state.style_text)
-    recommended = recommendation_tool(state.tags, state.budget, state.weather, state.duration)
+    try:
+        recommended = recommendation_tool(state.tags, state.budget, state.weather, state.duration)
+    except RuntimeError as error:
+        return {
+            "errors": [
+                str(error),
+                (
+                    "TourAPI를 사용하려면 TOUR_API_KEY 또는 TOURAPI_SERVICE_KEY 환경변수를 설정한 뒤 "
+                    "/api/places/sync를 호출하세요."
+                ),
+            ]
+        }, 503
+
+    if not recommended:
+        return {
+            "errors": [
+                "로컬 JSON DB에 추천 가능한 청주 장소가 없습니다.",
+                "/api/places/sync로 장소 데이터를 다시 수집해 주세요.",
+            ]
+        }, 503
+
     route = optimize_route_tool(state.start_point, recommended)
     legs = distance_tool(state.start_point, route, state.transport)
     return output_parser(state, route, legs), 200
@@ -700,6 +862,15 @@ def index():
 def recommend():
     result, status = run_agent(request.get_json(force=True))
     return jsonify(result), status
+
+
+@app.post("/api/places/sync")
+def sync_places():
+    try:
+        places = sync_place_db()
+    except RuntimeError as error:
+        return jsonify({"errors": [str(error)]}), 503
+    return jsonify({"count": len(places), "db_path": str(PLACE_DB_PATH), "places": places})
 
 
 if __name__ == "__main__":
