@@ -52,6 +52,7 @@ KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY") or os.getenv("KAKAO_API_KEY
 KAKAO_KEYWORD_SEARCHES = [
     ("청주 성안길 맛집", "meal"),
     ("청주 성안길 카페", "cafe"),
+    ("청주 성안길 노래방", "activity"),
     ("청주 운리단길 카페", "cafe"),
     ("청주 수암골 카페", "cafe"),
     ("청주 애견동반 카페", "cafe"),
@@ -79,6 +80,9 @@ STYLE_KEYWORDS = {
     "카페": ["카페", "커피", "디저트", "감성"],
     "맛집": ["맛집", "밥", "식사", "먹거리", "시장", "로컬"],
     "동물": ["동물", "반려견", "강아지", "고양이", "애견", "펫", "동물원"],
+    "동물먹이": ["먹이", "먹여", "먹이주", "사료", "동물 먹"],
+    "놀거리": ["놀거리", "노래방", "노래연습장", "노래연습실", "노래궁", "보드게임", "볼링", "방탈출", "오락", "게임"],
+    "노래방": ["노래방", "노래연습장", "노래연습실", "노래궁", "코인노래"],
     "산책": ["산책", "걷", "걷기", "느긋", "힐링"],
     "사진": ["사진", "포토", "인생샷", "야경", "감성"],
     "역사": ["역사", "박물관", "전시", "직지", "문화"],
@@ -125,79 +129,62 @@ LOCAL_FALLBACK_PLACES = [
         "source": "로컬 보강 DB",
         "address": "충북 청주시 흥덕구 무심서로 1097",
     },
-    {
-        "name": "수암골 카페거리",
-        "category": "카페거리",
-        "role": "cafe",
-        "lat": 36.6429,
-        "lng": 127.4931,
-        "tags": ["카페", "디저트", "사진", "산책"],
-        "score": 4.25,
-        "cost": 7000,
-        "indoor": True,
-        "stay_minutes": 55,
-        "source": "로컬 보강 DB",
-        "address": "충북 청주시 상당구 수암로 일대",
-    },
-    {
-        "name": "운리단길 카페거리",
-        "category": "카페거리",
-        "role": "cafe",
-        "lat": 36.6323,
-        "lng": 127.4574,
-        "tags": ["카페", "디저트", "사진", "산책"],
-        "score": 4.25,
-        "cost": 7000,
-        "indoor": True,
-        "stay_minutes": 55,
-        "source": "로컬 보강 DB",
-        "address": "충북 청주시 흥덕구 운천동 일대",
-    },
-    {
-        "name": "성안길 카페거리",
-        "category": "카페거리",
-        "role": "cafe",
-        "lat": 36.6358,
-        "lng": 127.4890,
-        "tags": ["카페", "디저트", "사진", "쇼핑"],
-        "score": 4.2,
-        "cost": 7000,
-        "indoor": True,
-        "stay_minutes": 50,
-        "source": "로컬 보강 DB",
-        "address": "충북 청주시 상당구 성안길 일대",
-    },
-    {
-        "name": "육거리종합시장",
-        "category": "시장",
-        "role": "meal",
-        "lat": 36.6288,
-        "lng": 127.4891,
-        "tags": ["맛집", "식사", "시장", "로컬"],
-        "score": 4.25,
-        "cost": 10000,
-        "indoor": True,
-        "stay_minutes": 65,
-        "source": "로컬 보강 DB",
-        "address": "충북 청주시 상당구 석교동 일대",
-    },
-    {
-        "name": "서문시장 삼겹살거리",
-        "category": "시장",
-        "role": "meal",
-        "lat": 36.6336,
-        "lng": 127.4868,
-        "tags": ["맛집", "식사", "로컬"],
-        "score": 4.2,
-        "cost": 14000,
-        "indoor": True,
-        "stay_minutes": 70,
-        "source": "로컬 보강 DB",
-        "address": "충북 청주시 상당구 서문동 일대",
-    },
 ]
 
 LOW_PRIORITY_REPEATED_CAFE_NAMES = {"목욕탕 카페(카페목간)", "폴앤주비 카페"}
+LOW_CONFIDENCE_PLACE_NAMES = {"레인데이"}
+GENERIC_PLACE_NAMES = {
+    "성안길",
+    "수암골 카페거리",
+    "운리단길 카페거리",
+    "성안길 카페거리",
+    "육거리종합시장",
+    "서문시장 삼겹살거리",
+}
+GENERIC_PLACE_SUFFIXES = ("카페거리", "맛집거리", "삼겹살거리")
+ANIMAL_EVIDENCE_TERMS = ("동물", "동물원", "반려견", "애견", "펫", "강아지", "고양이", "멍", "댕")
+ACTIVITY_EVIDENCE_TERMS = (
+    "놀거리",
+    "노래방",
+    "노래연습장",
+    "노래연습실",
+    "노래궁",
+    "코인노래",
+    "볼링",
+    "보드게임",
+    "방탈출",
+    "VR",
+    "피시방",
+    "PC방",
+    "게임",
+)
+MIN_RECOMMENDATION_QUALITY = 3.0
+CAFE_EVIDENCE_TERMS = ("카페", "커피", "디저트", "베이커리", "스타벅스", "메가MGC", "메가커피", "투썸", "컴포즈", "빽다방", "이디야")
+MEAL_EVIDENCE_TERMS = (
+    "음식점",
+    "한식",
+    "일식",
+    "중식",
+    "양식",
+    "분식",
+    "식당",
+    "맛집",
+    "국밥",
+    "순대",
+    "돈까스",
+    "돈가스",
+    "버거",
+    "냉면",
+    "칼국수",
+    "만두",
+    "고기",
+    "갈비",
+    "치킨",
+    "피자",
+    "초밥",
+    "카츠",
+    "장어",
+)
 
 
 def http_get(
@@ -308,9 +295,12 @@ def is_cheongju_place(name: str, address: str, admin_area: str, lat: float, lng:
 def infer_category(item: dict[str, Any], name: str, address: str, description: str) -> str:
     raw = first_text(item, ["tourSe", "cat3", "cat2", "cat1", "contenttypeid", "category", "type", "분류"])
     haystack = f"{name} {address} {description} {raw}"
+    direct_evidence = f"{name} {address} {raw}"
     name_text = name
-    if any(word in haystack for word in ["동물원", "반려견", "애견", "동물 체험", "펫"]):
-        return "관광지"
+    if any(word in direct_evidence for word in ANIMAL_EVIDENCE_TERMS):
+        return "동물체험"
+    if any(word in haystack for word in ACTIVITY_EVIDENCE_TERMS):
+        return "놀거리"
     if any(word in name_text for word in ["박물관", "미술관", "전시관", "기념관", "체험관", "교육원", "공예관"]):
         return "박물관"
     if any(word in name_text for word in ["카페", "커피"]):
@@ -339,8 +329,9 @@ def infer_category(item: dict[str, Any], name: str, address: str, description: s
 
 def infer_tags(category: str, name: str, address: str, description: str) -> list[str]:
     haystack = f"{category} {name} {address} {description}"
+    direct_evidence = f"{category} {name} {address}"
     tags = {"사진"}
-    if any(word in haystack for word in ["동물", "동물원", "반려견", "애견", "강아지", "고양이", "펫"]):
+    if category == "동물체험" or any(word in direct_evidence for word in ANIMAL_EVIDENCE_TERMS):
         tags.update(["동물", "산책", "자연"])
     if category in {"맛집", "시장", "카페", "카페거리"} or any(word in haystack for word in ["맛집", "먹거리", "시장", "카페"]):
         tags.update(["맛집", "카페"])
@@ -348,8 +339,12 @@ def infer_tags(category: str, name: str, address: str, description: str) -> list
         tags.update(["역사", "실내"])
     if category in {"공원"} or any(word in haystack for word in ["공원", "호수", "산", "숲", "둘레길", "산책"]):
         tags.update(["자연", "산책"])
-    if category == "관광지":
+    if category in {"관광지", "동물체험"}:
         tags.update(["산책", "자연"])
+    if category == "놀거리":
+        tags.update(["실내"])
+    if any(word in haystack for word in ["노래방", "노래연습장", "노래연습실", "노래궁", "코인노래"]):
+        tags.update(["노래방", "실내"])
     return sorted(tags)
 
 
@@ -360,6 +355,8 @@ def place_role_for_category(category: str) -> str:
         return "cafe"
     if category == "숙소":
         return "lodging"
+    if category in {"동물체험", "놀거리"}:
+        return "activity"
     if category in {"공원"}:
         return "walk"
     return "activity"
@@ -375,6 +372,154 @@ def role_label(role: str) -> str:
     }.get(role, "장소")
 
 
+def kakao_map_search_url(name: str, address: str = "") -> str:
+    query = " ".join(part for part in [name.strip(), address.strip()] if part)
+    return f"https://map.kakao.com/link/search/{urllib.parse.quote(query)}"
+
+
+def is_generic_area_place(name: str, address: str, category: str, source: str) -> bool:
+    normalized_name = re.sub(r"\s+", "", name)
+    if name in GENERIC_PLACE_NAMES:
+        return True
+    if any(name.endswith(suffix) for suffix in GENERIC_PLACE_SUFFIXES):
+        return True
+    if "일대" in address:
+        return True
+    if source != "카카오 Local API" and category in {"상권", "카페거리"}:
+        return True
+    if source != "카카오 Local API" and normalized_name in {"성안길", "운리단길", "수암골"}:
+        return True
+    return False
+
+
+def has_animal_evidence(name: str, address: str, category: str, kakao_category: str = "") -> bool:
+    direct_evidence = f"{name} {address} {category} {kakao_category}"
+    return any(word in direct_evidence for word in ANIMAL_EVIDENCE_TERMS)
+
+
+def is_low_confidence_place(
+    name: str,
+    source: str,
+    role: str,
+    category: str,
+    tags: list[str],
+    phone: str,
+) -> bool:
+    if name in LOW_CONFIDENCE_PLACE_NAMES:
+        return True
+    if source != "카카오 Local API":
+        return False
+    if role != "activity":
+        return False
+    if category in {"동물체험", "놀거리"} and not phone.strip():
+        return True
+    if "동물" in tags and not phone.strip():
+        return True
+    return False
+
+
+def is_pet_care_place(place: dict[str, Any]) -> bool:
+    haystack = f"{place['name']} {place.get('kakao_category', '')} {' '.join(place.get('tags', []))}"
+    return any(
+        word in haystack
+        for word in ["반려견", "애견", "펫", "강아지", "댕댕", "멍뭉", "퍼피", "유치원", "놀이터", "스테이", "호텔", "미용", "헬스멍"]
+    )
+
+
+def kakao_role_matches_query(role: str, name: str, kakao_category: str, query: str) -> bool:
+    evidence = f"{name} {kakao_category}"
+    if role == "meal":
+        if any(word in evidence for word in CAFE_EVIDENCE_TERMS) and not any(word in evidence for word in MEAL_EVIDENCE_TERMS):
+            return False
+    if role == "cafe":
+        if any(word in evidence for word in MEAL_EVIDENCE_TERMS) and not any(word in evidence for word in CAFE_EVIDENCE_TERMS):
+            return False
+    if role == "activity":
+        activity_match = any(word in evidence for word in ACTIVITY_EVIDENCE_TERMS)
+        animal_match = any(word in evidence for word in ANIMAL_EVIDENCE_TERMS)
+        if not activity_match and not animal_match and any(word in evidence for word in CAFE_EVIDENCE_TERMS + MEAL_EVIDENCE_TERMS):
+            return False
+    return True
+
+
+def place_quality_score(place: dict[str, Any]) -> float:
+    name = str(place.get("name", "")).strip()
+    address = str(place.get("address", "")).strip()
+    category = str(place.get("category", "")).strip()
+    source = str(place.get("source", "")).strip()
+    role = str(place.get("role", "")).strip()
+    phone = str(place.get("phone", "")).strip()
+    url = str(place.get("url") or place.get("map_url") or "").strip()
+    kakao_category = str(place.get("kakao_category", "")).strip()
+    tags = [str(tag).strip() for tag in place.get("tags", []) if str(tag).strip()]
+
+    if is_generic_area_place(name, address, category, source):
+        return 0.0
+    if is_low_confidence_place(name, source, role, category, tags, phone):
+        return 0.0
+
+    score = 0.0
+    if source == "카카오 Local API":
+        score += 2.0
+        if url:
+            score += 1.5
+        if phone:
+            score += 1.5
+        if address and "일대" not in address:
+            score += 1.0
+        if kakao_category:
+            score += 1.0
+        if role in {"meal", "cafe", "lodging"}:
+            score += 0.7
+        if role == "activity" and category in {"놀거리", "동물체험"}:
+            score += 0.7
+    elif source == "충청북도 관광명소정보 API":
+        score += 3.0
+        if address and "일대" not in address:
+            score += 0.8
+        if category in {"박물관", "공원", "관광지", "동물체험", "놀거리"}:
+            score += 0.7
+    elif source == "로컬 보강 DB":
+        score += 3.5
+        if address:
+            score += 0.8
+    else:
+        score += 1.0
+
+    if name in LOW_CONFIDENCE_PLACE_NAMES:
+        score -= 10.0
+    return round(max(0.0, score), 2)
+
+
+def estimate_kakao_cost(role: str, category: str, name: str, query: str, kakao_category: str) -> int:
+    haystack = f"{name} {query} {kakao_category} {category}"
+    if role == "meal":
+        return 12000
+    if role == "cafe":
+        return 7000
+    if role == "lodging":
+        return 40000
+    if any(word in haystack for word in ["동물", "반려견", "애견", "펫", "강아지", "고양이", "멍", "댕"]):
+        if "문암" in haystack and "놀이터" in haystack:
+            return 0
+        return 12000
+    if any(word in haystack for word in ["노래방", "코인노래", "볼링", "보드게임", "방탈출", "VR", "피시방", "PC방", "게임"]):
+        return 12000
+    if any(word in haystack for word in ["체험", "공방", "클래스"]):
+        return 15000
+    if category in {"카페거리", "상권", "시장"}:
+        return 10000
+    return 5000
+
+
+def pet_care_penalty(place: dict[str, Any], tags: list[str]) -> float:
+    if "동물먹이" not in tags:
+        return 0.0
+    if is_pet_care_place(place):
+        return 20.0
+    return 0.0
+
+
 def normalize_kakao_place(item: dict[str, Any], query: str, role: str) -> dict[str, Any] | None:
     name = first_text(item, ["place_name"])
     address = first_text(item, ["road_address_name", "address_name"])
@@ -386,30 +531,33 @@ def normalize_kakao_place(item: dict[str, Any], query: str, role: str) -> dict[s
         return None
 
     kakao_category = first_text(item, ["category_group_name", "category_name"])
+    phone = first_text(item, ["phone"])
+    place_url = first_text(item, ["place_url"])
+    if not kakao_role_matches_query(role, name, kakao_category, query):
+        return None
     if role == "meal":
         category = "맛집"
         tags = ["맛집", "식사", "로컬"]
-        cost = 12000
         stay_minutes = 60
         indoor = True
     elif role == "cafe":
         category = "카페"
         tags = ["카페", "디저트", "사진"]
-        cost = 7000
         stay_minutes = 50
         indoor = True
     elif role == "lodging":
         category = "숙소"
         tags = ["실내", "숙소", "교통"]
-        cost = 40000
         stay_minutes = 0
         indoor = True
     else:
         category = infer_category({"category": kakao_category}, name, address, query)
         tags = infer_tags(category, name, address, query)
-        cost = 10000 if category in {"카페거리", "상권", "시장"} else 0
         stay_minutes = 80
-        indoor = "실내" in tags or category in {"박물관", "카페거리", "상권"}
+        indoor = "실내" in tags or category in {"박물관", "카페거리", "상권", "놀거리"}
+    cost = estimate_kakao_cost(role, category, name, query, kakao_category)
+    if is_low_confidence_place(name, "카카오 Local API", role, category, tags, phone):
+        return None
 
     return {
         "name": name,
@@ -424,8 +572,10 @@ def normalize_kakao_place(item: dict[str, Any], query: str, role: str) -> dict[s
         "stay_minutes": stay_minutes,
         "source": "카카오 Local API",
         "address": address,
-        "phone": first_text(item, ["phone"]),
-        "url": first_text(item, ["place_url"]),
+        "phone": phone,
+        "url": place_url,
+        "map_url": place_url or kakao_map_search_url(name, address),
+        "kakao_category": kakao_category,
         "search_query": query,
     }
 
@@ -445,7 +595,7 @@ def normalize_place(item: dict[str, Any], source: str) -> dict[str, Any] | None:
 
     category = infer_category(item, name, address, description)
     tags = infer_tags(category, name, address, description)
-    indoor = "실내" in tags or category in {"박물관", "카페거리"}
+    indoor = "실내" in tags or category in {"박물관", "카페거리", "놀거리"}
     cost = 8000 if category in {"시장", "카페거리"} else 0
     stay_minutes = 90 if category in {"관광지", "박물관"} else 70
 
@@ -462,6 +612,7 @@ def normalize_place(item: dict[str, Any], source: str) -> dict[str, Any] | None:
         "stay_minutes": stay_minutes,
         "source": source,
         "address": address,
+        "map_url": kakao_map_search_url(name, address),
     }
 
 
@@ -523,8 +674,16 @@ def sanitize_place_db(places: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not is_cheongju_place(name, address, "", float(lat), float(lng)):
             continue
 
-        category = infer_category({"category": place.get("category", "")}, name, address, "")
+        source = str(place.get("source", "")).strip()
+        search_query = str(place.get("search_query", "")).strip()
+        kakao_category = str(place.get("kakao_category", "")).strip()
         original_role = str(place.get("role", "")).strip()
+        if source == "카카오 Local API" and original_role and not kakao_role_matches_query(original_role, name, kakao_category, search_query):
+            continue
+        raw_category = place.get("kakao_category") if source == "카카오 Local API" else place.get("category", "")
+        category = infer_category({"category": raw_category or ""}, name, address, search_query)
+        if is_generic_area_place(name, address, category, source):
+            continue
         if original_role in {"meal", "cafe", "lodging"}:
             role = original_role
             category = {"meal": "맛집", "cafe": "카페", "lodging": "숙소"}[role]
@@ -536,15 +695,31 @@ def sanitize_place_db(places: list[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             role = place_role_for_category(category)
             tags = infer_tags(category, name, address, "")
-        tags = sorted(set(tags).union(str(tag).strip() for tag in place.get("tags", []) if str(tag).strip()))
+        existing_tags = [str(tag).strip() for tag in place.get("tags", []) if str(tag).strip()]
+        if not has_animal_evidence(name, address, category, str(place.get("kakao_category", ""))):
+            existing_tags = [tag for tag in existing_tags if tag != "동물"]
+        tags = sorted(set(tags).union(existing_tags))
+        kakao_category = str(place.get("kakao_category", place.get("category", ""))).strip()
+        phone = str(place.get("phone", "")).strip()
+        if is_low_confidence_place(name, source, role, category, tags, phone):
+            continue
+        cost = int(place.get("cost") or 0)
+        if source == "카카오 Local API":
+            cost = estimate_kakao_cost(role, category, name, search_query, kakao_category)
+        map_url = str(place.get("map_url") or place.get("url") or "").strip() or kakao_map_search_url(name, address)
+        normalized_place = {
+            **place,
+            "category": category,
+            "role": role,
+            "tags": tags,
+            "phone": phone,
+            "cost": cost,
+            "indoor": bool(place.get("indoor")) or "실내" in tags or category in {"박물관", "카페거리", "카페", "맛집", "상권", "숙소", "놀거리"},
+            "map_url": map_url,
+        }
+        normalized_place["quality_score"] = place_quality_score(normalized_place)
         sanitized.append(
-            {
-                **place,
-                "category": category,
-                "role": role,
-                "tags": tags,
-                "indoor": bool(place.get("indoor")) or "실내" in tags or category in {"박물관", "카페거리", "카페", "맛집", "상권", "숙소"},
-            }
+            normalized_place
         )
     return dedupe_places(sanitized)
 
@@ -569,7 +744,7 @@ def sync_place_db() -> list[dict[str, Any]]:
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, ET.ParseError, OSError) as error:
             errors.append(f"{source}: {error}")
 
-    collected = dedupe_places(collected + LOCAL_FALLBACK_PLACES)
+    collected = sanitize_place_db(collected + LOCAL_FALLBACK_PLACES)
     if collected:
         save_place_db(collected, source_summary(collected), errors, source_counter(collected))
         return collected
@@ -814,12 +989,25 @@ def category_preference_score(place: dict[str, Any], tags: list[str]) -> float:
             score += 7.0
         elif category in {"공원", "관광지"}:
             score += 0.8
+    if "동물먹이" in tags:
+        haystack = f"{place['name']} {place.get('kakao_category', '')} {' '.join(place_tags)}"
+        if "동물원" in haystack:
+            score += 12.0
+        elif category == "동물체험" and not any(word in haystack for word in ["반려견", "애견", "펫", "강아지", "댕댕", "멍뭉", "퍼피"]):
+            score += 7.0
     if "카페" in tags and category in {"카페", "카페거리", "상권"}:
         score += 3.0
     if "맛집" in tags and category in {"맛집", "시장", "상권", "카페거리"}:
         score += 3.0
     if "쇼핑" in tags and category in {"상권", "시장"}:
         score += 2.6
+    if "놀거리" in tags and category in {"놀거리", "동물체험"}:
+        score += 4.0
+    if "노래방" in tags:
+        if "노래방" in place_tags:
+            score += 8.0
+        elif category == "놀거리":
+            score += 1.5
     if "역사" in tags and category in {"박물관", "관광지"}:
         score += 2.6
     if "산책" in tags and category in {"공원", "관광지"}:
@@ -861,11 +1049,17 @@ def diversity_adjusted_selection(
 def preferred_categories(tags: list[str], weather: str) -> set[str]:
     categories: set[str] = set()
     if "동물" in tags:
-        categories.update({"관광지", "공원", "카페", "카페거리"})
+        categories.update({"동물체험", "관광지", "공원", "카페", "카페거리", "놀거리"})
+    if "동물먹이" in tags:
+        categories.update({"동물체험", "관광지"})
+    if "놀거리" in tags:
+        categories.update({"놀거리", "카페"})
+    if "노래방" in tags:
+        categories.update({"놀거리"})
     if {"맛집", "카페", "쇼핑"}.intersection(tags):
         categories.update({"맛집", "카페", "시장", "상권", "카페거리"})
     if "역사" in tags or "실내" in tags or weather == "비":
-        categories.update({"박물관", "카페", "카페거리", "상권", "맛집"})
+        categories.update({"박물관", "카페", "카페거리", "상권", "맛집", "놀거리"})
     if {"산책", "자연", "사진"}.intersection(tags):
         categories.update({"공원", "관광지", "카페거리", "박물관"})
     return categories
@@ -962,7 +1156,7 @@ def role_matches(place: dict[str, Any], role: str) -> bool:
     if role == "walk":
         return place_role == "walk" or place["category"] in {"공원", "관광지"} or "산책" in place["tags"]
     if role == "activity":
-        return place_role in {"activity", "walk"} or place["category"] in {"관광지", "박물관", "공원", "상권"} or "동물" in place["tags"]
+        return place_role in {"activity", "walk"} or place["category"] in {"관광지", "박물관", "공원", "상권", "놀거리", "동물체험"} or "동물" in place["tags"]
     return place_role == role
 
 
@@ -1038,6 +1232,7 @@ def slot_candidate_score(
         - duplicate_category_count * 1.2
         - budget_penalty
         - repeated_cafe_penalty(place)
+        - pet_care_penalty(place, tags)
     )
 
 
@@ -1119,11 +1314,15 @@ def recommendation_tool(
     place_db = load_place_db()
 
     for place in place_db:
+        quality = float(place.get("quality_score") or place_quality_score(place))
+        if quality < MIN_RECOMMENDATION_QUALITY:
+            continue
         matched_tags = sorted(set(tags).intersection(place["tags"]))
         budget_penalty = 1.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
         start_distance = haversine_km(start_point, place)
         score = (
             place["score"]
+            + min(quality, 6.0) * 0.35
             + len(matched_tags) * 2
             + weather_filter_score(place, weather)
             + indoor_preference_score(place, tags)
@@ -1131,6 +1330,7 @@ def recommendation_tool(
             + start_proximity_score(start_distance, transport)
             - budget_penalty
             - repeated_cafe_penalty(place)
+            - pet_care_penalty(place, tags)
         )
         places.append(
             {
@@ -1138,6 +1338,7 @@ def recommendation_tool(
                 "matched_tags": matched_tags,
                 "start_distance_km": round(start_distance, 2),
                 "role": place.get("role") or place_role_for_category(place["category"]),
+                "quality_score": quality,
                 "agent_score": round(score, 2),
             }
         )
@@ -1147,6 +1348,12 @@ def recommendation_tool(
         key=lambda item: (item["agent_score"], -item["start_distance_km"]),
         reverse=True,
     )
+    if "동물먹이" in tags:
+        ranked_places = [
+            place
+            for place in ranked_places
+            if not ((place.get("role") == "activity" or place["category"] == "동물체험") and is_pet_care_place(place))
+        ]
     preferred = preferred_categories(tags, weather)
     preferred_ranked_places = [place for place in ranked_places if place["category"] in preferred]
     slot_roles = {slot["role"] for slot in slots}
@@ -1477,6 +1684,9 @@ def output_parser(
                 "address": place.get("address"),
                 "phone": place.get("phone"),
                 "url": place.get("url"),
+                "map_url": place.get("map_url") or place.get("url") or kakao_map_search_url(place["name"], place.get("address", "")),
+                "source": place.get("source"),
+                "quality_score": place.get("quality_score"),
             }
             for place in route
         ],
