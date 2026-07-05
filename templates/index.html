@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cheongju Trip Agent</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="panel input-panel">
+        <div class="brand">
+          <p>Local route optimizer</p>
+          <h1>Cheongju Trip Agent</h1>
+        </div>
+
+        <form id="tripForm">
+          <label>
+            출발지
+            <select name="start_name">
+              <option>충북대</option>
+              <option>청주고속버스터미널</option>
+              <option>청주역</option>
+              <option>오송역</option>
+            </select>
+          </label>
+
+          <label>
+            여행 기간
+            <select name="duration">
+              <option>당일치기</option>
+              <option>1박 2일</option>
+            </select>
+          </label>
+
+          <label>
+            여행 스타일
+            <textarea name="style_text" rows="4">카페 가고 싶고 사진 찍기 좋은 곳, 밥도 먹고 싶어</textarea>
+          </label>
+
+          <div class="grid-two">
+            <label>
+              이동수단
+              <select name="transport">
+                <option>대중교통</option>
+                <option>자동차</option>
+                <option>도보 중심</option>
+              </select>
+            </label>
+
+            <label>
+              날씨
+              <select name="weather">
+                <option>맑음</option>
+                <option>비</option>
+                <option>더움</option>
+                <option>추움</option>
+              </select>
+            </label>
+          </div>
+
+          <label>
+            예산
+            <input name="budget" type="number" min="1000" value="50000" />
+          </label>
+
+          <button type="submit">일정 생성</button>
+        </form>
+      </section>
+
+      <section class="panel result-panel">
+        <div id="emptyState" class="empty-state">
+          <h2>취향만 입력하면 장소와 동선을 자동으로 고릅니다.</h2>
+          <p>장소명은 직접 입력하지 않아도 됩니다. Agent가 내부 장소 DB, 태그 분석, 날씨 필터, 거리 계산을 순서대로 실행합니다.</p>
+        </div>
+
+        <div id="result" class="result hidden">
+          <div class="result-header">
+            <div>
+              <p id="tagLine"></p>
+              <h2 id="resultTitle"></h2>
+            </div>
+            <div class="metric">
+              <span id="totalDistance">0km</span>
+              <small>예상 이동거리</small>
+            </div>
+          </div>
+
+          <div class="summary-grid">
+            <div>
+              <span>예상 비용</span>
+              <strong id="totalCost"></strong>
+            </div>
+            <div>
+              <span>이동 시간</span>
+              <strong id="moveTime"></strong>
+            </div>
+            <div>
+              <span>마무리</span>
+              <strong id="finish"></strong>
+            </div>
+            <div>
+              <span>AI 모드</span>
+              <strong id="aiMode"></strong>
+            </div>
+          </div>
+
+          <section>
+            <h3>AI 최종 코멘트</h3>
+            <p id="aiComment" class="ai-comment"></p>
+          </section>
+
+          <section>
+            <h3>최적 동선</h3>
+            <p id="routeText" class="route-text"></p>
+          </section>
+
+          <section id="accommodationSection" class="hidden">
+            <h3>숙소 추천</h3>
+            <article id="accommodation" class="lodging-card"></article>
+          </section>
+
+          <section>
+            <h3>일정표</h3>
+            <div id="schedule" class="timeline"></div>
+          </section>
+
+          <section>
+            <h3>장소별 추천 근거</h3>
+            <div id="places" class="place-grid"></div>
+          </section>
+
+          <section>
+            <h3>Agent 내부 구조</h3>
+            <div id="flow" class="flow"></div>
+          </section>
+
+          <div id="warnings" class="warnings"></div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const form = document.querySelector("#tripForm");
+      const result = document.querySelector("#result");
+      const emptyState = document.querySelector("#emptyState");
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = Object.fromEntries(new FormData(form).entries());
+
+        const response = await fetch("/api/recommend", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          alert(data.errors.join("\n"));
+          return;
+        }
+        renderResult(data);
+      });
+
+      function renderResult(data) {
+        emptyState.classList.add("hidden");
+        result.classList.remove("hidden");
+
+        document.querySelector("#tagLine").textContent = `${data.summary.weather} · ${data.summary.transport} · ${data.summary.tags.join(", ")}`;
+        document.querySelector("#resultTitle").textContent = data.summary.title;
+        document.querySelector("#totalDistance").textContent = `${data.summary.total_distance}km`;
+        document.querySelector("#totalCost").textContent = `${data.summary.total_cost.toLocaleString()}원 / ${data.summary.budget.toLocaleString()}원`;
+        document.querySelector("#moveTime").textContent = `${data.summary.total_move_minutes}분`;
+        document.querySelector("#finish").textContent = data.summary.finish;
+        document.querySelector("#aiMode").textContent = data.summary.ai_mode;
+        document.querySelector("#aiComment").textContent = data.summary.ai_comment;
+        document.querySelector("#routeText").textContent = data.summary.route_text;
+
+        const accommodationSection = document.querySelector("#accommodationSection");
+        const accommodation = document.querySelector("#accommodation");
+        if (data.accommodation) {
+          accommodationSection.classList.remove("hidden");
+          accommodation.innerHTML = `
+            <div>
+              <h4>${data.accommodation.name}</h4>
+              <p>${data.accommodation.category} · ${data.accommodation.cost.toLocaleString()}원 · Day 1 마지막 장소에서 약 ${data.accommodation.distance_from_day1_km}km</p>
+            </div>
+            <div class="chips">
+              ${data.accommodation.tags.map((tag) => `<span>${tag}</span>`).join("")}
+            </div>
+          `;
+        } else {
+          accommodationSection.classList.add("hidden");
+          accommodation.innerHTML = "";
+        }
+
+        document.querySelector("#schedule").innerHTML = data.schedule
+          .map((item) => `
+            <article class="timeline-item">
+              <div class="time">Day ${item.day}<br>${item.time}</div>
+              <div>
+                <h4>${item.place}</h4>
+                <p>${item.category} · ${item.indoor ? "실내" : "야외"} · ${item.cost.toLocaleString()}원</p>
+                <span>${item.reason}</span>
+              </div>
+            </article>
+          `)
+          .join("");
+
+        document.querySelector("#places").innerHTML = data.places
+          .map((place) => `
+            <article class="place-card">
+              <div>
+                <h4>${place.name}</h4>
+                <p>${place.category} · Agent Score ${place.score}</p>
+              </div>
+              <div class="chips">
+                ${place.tags.map((tag) => `<span>${tag}</span>`).join("")}
+              </div>
+            </article>
+          `)
+          .join("");
+
+        document.querySelector("#flow").innerHTML = data.agent_flow
+          .map((step, index) => `<span>${index + 1}. ${step}</span>`)
+          .join("");
+
+        document.querySelector("#warnings").innerHTML = data.warnings
+          .map((warning) => `<p>${warning}</p>`)
+          .join("");
+      }
+    </script>
+  </body>
+</html>

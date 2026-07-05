@@ -1,0 +1,48 @@
+# Python cache / build outputs
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local secrets and environment variables
+.env
+.env.*
+!.env.example
+
+# Local server logs / runtime files
+*.log
+server.out.log
+server.err.log
+
+# Editor and local tool metadata
+.vscode/
+.idea/
+.agents/
+.codex/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Submission / archive artifacts
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+
+# Generated reports
+*.pdf
+*.docx
