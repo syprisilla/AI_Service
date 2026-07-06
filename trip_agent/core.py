@@ -160,6 +160,7 @@ KAKAO_KEYWORD_SEARCHES = [
     ("청주 충북대 방탈출", "activity"),
     ("청주 충북대 놀거리", "activity"),
     ("청주 충북대 술집", "activity"),
+    ("청주 충북대 영화관", "activity"),
     ("청주 충북대 산책", "activity"),
     ("청주 충북대 사진", "activity"),
 
@@ -272,6 +273,7 @@ KAKAO_KEYWORD_SEARCHES = [
     ("오송역 볼링", "activity"),
     ("오송역 놀거리", "activity"),
     ("오송역 술집", "activity"),
+    ("오송역 영화관", "activity"),
     ("오송역 산책", "activity"),
 
     # 오송역 주변 지명
@@ -447,6 +449,286 @@ LOCAL_FALLBACK_PLACES = [
         "source": "로컬 보강 DB",
         "address": "충북 청주시 흥덕구 무심서로 1097",
     },
+    {
+        "name": "멘야마쯔리 충북대점",
+        "category": "맛집",
+        "role": "meal",
+        "lat": 36.6328,
+        "lng": 127.4545,
+        "tags": ["맛집", "식사", "로컬", "실내"],
+        "score": 4.55,
+        "cost": 12000,
+        "indoor": True,
+        "stay_minutes": 60,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 내수동로 63",
+    },
+    {
+        "name": "스타벅스 충북대점",
+        "category": "카페",
+        "role": "cafe",
+        "lat": 36.6326,
+        "lng": 127.4564,
+        "tags": ["카페", "디저트", "사진", "실내"],
+        "score": 4.45,
+        "cost": 7000,
+        "indoor": True,
+        "stay_minutes": 50,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 서원구 1순환로 682",
+    },
+    {
+        "name": "히어로보드 게임카페 충북대점",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6321,
+        "lng": 127.4572,
+        "tags": ["보드게임", "놀거리", "카페", "실내", "사진"],
+        "score": 4.5,
+        "cost": 12000,
+        "indoor": True,
+        "stay_minutes": 80,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 서원구 1순환로672번길 63",
+    },
+    {
+        "name": "락휴코인노래연습장 충북대점",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6323,
+        "lng": 127.4560,
+        "tags": ["노래방", "놀거리", "실내"],
+        "score": 4.35,
+        "cost": 10000,
+        "indoor": True,
+        "stay_minutes": 60,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 서원구 사창동",
+    },
+    {
+        "name": "메가박스 충북대",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6318,
+        "lng": 127.4586,
+        "tags": ["영화관", "놀거리", "실내", "사진"],
+        "score": 4.4,
+        "cost": 15000,
+        "indoor": True,
+        "stay_minutes": 120,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 서원구 사창동",
+    },
+    {
+        "name": "청주터미널 인근 밥집",
+        "category": "맛집",
+        "role": "meal",
+        "lat": 36.6268,
+        "lng": 127.4312,
+        "tags": ["맛집", "식사", "로컬", "실내"],
+        "score": 4.35,
+        "cost": 12000,
+        "indoor": True,
+        "stay_minutes": 60,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 가경동",
+    },
+    {
+        "name": "청주터미널 인근 카페",
+        "category": "카페",
+        "role": "cafe",
+        "lat": 36.6263,
+        "lng": 127.4324,
+        "tags": ["카페", "디저트", "사진", "실내"],
+        "score": 4.3,
+        "cost": 7000,
+        "indoor": True,
+        "stay_minutes": 50,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 가경동",
+    },
+    {
+        "name": "보드게임카페 레드버튼 청주터미널점",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6265,
+        "lng": 127.4330,
+        "tags": ["보드게임", "놀거리", "카페", "실내", "사진"],
+        "score": 4.45,
+        "cost": 12000,
+        "indoor": True,
+        "stay_minutes": 80,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 가경동",
+    },
+    {
+        "name": "청주터미널 인근 코인노래연습장",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6254,
+        "lng": 127.4327,
+        "tags": ["노래방", "놀거리", "실내"],
+        "score": 4.3,
+        "cost": 10000,
+        "indoor": True,
+        "stay_minutes": 60,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 가경동",
+    },
+    {
+        "name": "청주터미널 인근 영화관",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6258,
+        "lng": 127.4306,
+        "tags": ["영화관", "놀거리", "실내", "사진"],
+        "score": 4.3,
+        "cost": 15000,
+        "indoor": True,
+        "stay_minutes": 120,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 가경동",
+    },
+    {
+        "name": "동남지구 인근 밥집",
+        "category": "맛집",
+        "role": "meal",
+        "lat": 36.6179,
+        "lng": 127.5158,
+        "tags": ["맛집", "식사", "로컬", "실내"],
+        "score": 4.35,
+        "cost": 12000,
+        "indoor": True,
+        "stay_minutes": 60,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 상당구 용암동",
+    },
+    {
+        "name": "동남지구 인근 카페",
+        "category": "카페",
+        "role": "cafe",
+        "lat": 36.6183,
+        "lng": 127.5146,
+        "tags": ["카페", "디저트", "사진", "실내"],
+        "score": 4.3,
+        "cost": 7000,
+        "indoor": True,
+        "stay_minutes": 50,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 상당구 용암동",
+    },
+    {
+        "name": "동남지구 인근 보드게임카페",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6169,
+        "lng": 127.5155,
+        "tags": ["보드게임", "놀거리", "카페", "실내", "사진"],
+        "score": 4.35,
+        "cost": 12000,
+        "indoor": True,
+        "stay_minutes": 80,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 상당구 용암동",
+    },
+    {
+        "name": "동남지구 인근 코인노래연습장",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6165,
+        "lng": 127.5142,
+        "tags": ["노래방", "놀거리", "실내"],
+        "score": 4.3,
+        "cost": 10000,
+        "indoor": True,
+        "stay_minutes": 60,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 상당구 용암동",
+    },
+    {
+        "name": "동남지구 인근 영화관",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6172,
+        "lng": 127.5165,
+        "tags": ["영화관", "놀거리", "실내", "사진"],
+        "score": 4.3,
+        "cost": 15000,
+        "indoor": True,
+        "stay_minutes": 120,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 상당구 용암동",
+    },
+    {
+        "name": "오송역 인근 밥집",
+        "category": "맛집",
+        "role": "meal",
+        "lat": 36.6205,
+        "lng": 127.3282,
+        "tags": ["맛집", "식사", "로컬", "실내"],
+        "score": 4.3,
+        "cost": 12000,
+        "indoor": True,
+        "stay_minutes": 60,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 오송읍",
+    },
+    {
+        "name": "오송역 인근 카페",
+        "category": "카페",
+        "role": "cafe",
+        "lat": 36.6196,
+        "lng": 127.3280,
+        "tags": ["카페", "디저트", "사진", "실내"],
+        "score": 4.3,
+        "cost": 7000,
+        "indoor": True,
+        "stay_minutes": 50,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 오송읍",
+    },
+    {
+        "name": "오송역 인근 보드게임카페",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6202,
+        "lng": 127.3266,
+        "tags": ["보드게임", "놀거리", "카페", "실내", "사진"],
+        "score": 4.25,
+        "cost": 12000,
+        "indoor": True,
+        "stay_minutes": 80,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 오송읍",
+    },
+    {
+        "name": "오송역 인근 코인노래연습장",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6192,
+        "lng": 127.3270,
+        "tags": ["노래방", "놀거리", "실내"],
+        "score": 4.25,
+        "cost": 10000,
+        "indoor": True,
+        "stay_minutes": 60,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 오송읍",
+    },
+    {
+        "name": "오송역 인근 영화관",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6208,
+        "lng": 127.3271,
+        "tags": ["영화관", "놀거리", "실내", "사진"],
+        "score": 4.25,
+        "cost": 15000,
+        "indoor": True,
+        "stay_minutes": 120,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 오송읍",
+    },
 ]
 
 LOW_PRIORITY_REPEATED_CAFE_NAMES = {"목욕탕 카페(카페목간)", "폴앤주비 카페"}
@@ -471,6 +753,10 @@ ACTIVITY_EVIDENCE_TERMS = (
     "볼링",
     "보드게임",
     "방탈출",
+    "영화관",
+    "메가박스",
+    "CGV",
+    "롯데시네마",
     "VR",
     "피시방",
     "PC방",
@@ -619,10 +905,12 @@ def infer_category(item: dict[str, Any], name: str, address: str, description: s
         return "동물체험"
     if any(word in haystack for word in ACTIVITY_EVIDENCE_TERMS):
         return "놀거리"
+    if "카페" in raw or any(word in name_text for word in CAFE_EVIDENCE_TERMS):
+        return "카페"
+    if any(word in raw for word in MEAL_EVIDENCE_TERMS):
+        return "맛집"
     if any(word in name_text for word in ["박물관", "미술관", "전시관", "기념관", "체험관", "교육원", "공예관"]):
         return "박물관"
-    if any(word in name_text for word in ["카페", "커피"]):
-        return "카페거리"
     if any(word in name_text for word in ["성안길", "상권"]):
         return "상권"
     if "시장" in name_text:
@@ -663,6 +951,8 @@ def infer_tags(category: str, name: str, address: str, description: str) -> list
         tags.update(["실내"])
     if any(word in haystack for word in ["노래방", "노래연습장", "노래연습실", "노래궁", "코인노래"]):
         tags.update(["노래방", "실내"])
+    if any(word in haystack for word in ["보드게임", "영화관", "메가박스", "CGV", "롯데시네마"]):
+        tags.update(["놀거리", "실내"])
     return sorted(tags)
 
 
@@ -1719,7 +2009,7 @@ def preferred_categories(tags: list[str], weather: str) -> set[str]:
     if "노래방" in tags:
         categories.update({"놀거리"})
     if {"맛집", "카페", "쇼핑"}.intersection(tags):
-        categories.update({"맛집", "카페", "시장", "상권", "카페거리"})
+        categories.update({"맛집", "카페", "시장", "상권", "카페거리", "놀거리"})
     if "역사" in tags or "실내" in tags or weather == "비":
         categories.update({"박물관", "카페", "카페거리", "상권", "맛집", "놀거리"})
     if {"산책", "자연", "사진"}.intersection(tags):
@@ -1826,7 +2116,11 @@ def role_matches(place: dict[str, Any], role: str) -> bool:
     if role == "cafe":
         return place_role == "cafe" or place["category"] in {"카페", "카페거리", "상권"}
     if role == "walk":
-        return place_role == "walk" or place["category"] in {"공원", "관광지"} or "산책" in place["tags"]
+        return (
+            place_role == "walk"
+            or place["category"] in {"공원", "관광지", "놀거리"}
+            or bool({"산책", "보드게임", "영화관", "노래방", "놀거리"}.intersection(place["tags"]))
+        )
     if role == "activity":
         return place_role in {"activity", "walk"} or place["category"] in {"관광지", "박물관", "공원", "상권", "놀거리", "동물체험"} or "동물" in place["tags"]
     return place_role == role
@@ -1994,8 +2288,19 @@ def recommendation_tool(
 ) -> list[dict[str, Any]]:
     places = []
     slots = itinerary_slots(duration)
-    if transport == "도보 중심" and duration == "당일치기":
-        slots = slots[:4]
+
+    # 도보 중심이어도 당일치기 기본 슬롯 5개 유지
+    MIN_DAY_TRIP_SLOTS = 5
+
+    if duration == "당일치기" and len(slots) < MIN_DAY_TRIP_SLOTS:
+        slots = [
+            {"day": 1, "role": "meal", "label": "밥집"},
+            {"day": 1, "role": "activity", "label": "놀거리"},
+            {"day": 1, "role": "cafe", "label": "카페"},
+            {"day": 1, "role": "activity", "label": "놀거리"},
+            {"day": 1, "role": "walk", "label": "산책/마무리"},
+        ]
+
     target_count = len(slots)
     per_place_budget = budget / target_count
     place_db = load_place_db()
@@ -2086,8 +2391,18 @@ def candidate_lookup_tool(
     max_candidates: int = 48,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     slots = itinerary_slots(state["duration"])
-    if state["transport"] == "도보 중심" and state["duration"] == "당일치기":
-        slots = slots[:4]
+
+    # 도보 중심이어도 당일치기 기본 슬롯 5개를 유지
+    MIN_DAY_TRIP_SLOTS = 5
+
+    if state["duration"] == "당일치기" and len(slots) < MIN_DAY_TRIP_SLOTS:
+        slots = [
+            {"day": 1, "role": "meal", "label": "밥집"},
+            {"day": 1, "role": "activity", "label": "놀거리"},
+            {"day": 1, "role": "cafe", "label": "카페"},
+            {"day": 1, "role": "activity", "label": "놀거리"},
+            {"day": 1, "role": "walk", "label": "산책/마무리"},
+        ]
 
     places: list[dict[str, Any]] = []
     place_db = load_place_db()
@@ -2136,6 +2451,7 @@ def candidate_lookup_tool(
         ),
         reverse=True,
     )
+    ranked = transport_filtered_places(ranked, target_count, state["transport"])
 
     selected: list[dict[str, Any]] = []
     selected_names: set[str] = set()
@@ -2964,5 +3280,3 @@ def run_agent(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
         config = {"configurable": {"thread_id": session_id}}
         graph_state = AGENT_GRAPH.invoke(initial_state, config=config)
     return graph_state.get("result", {"errors": ["Agent 실행 결과가 비어 있습니다."]}), graph_state.get("status", 500)
-
-
