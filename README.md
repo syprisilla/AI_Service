@@ -44,14 +44,46 @@ KAKAO_REST_API_KEY=발급받은_REST_API_KEY
 
 `OPENAI_API_KEY`가 설정되어 있으면 추천 요청은 다음 순서로 동작합니다.
 
-1. LLM이 사용자 입력을 여행 의도와 선호 태그로 해석합니다.
-2. 앱이 카카오/관광 API 기반 로컬 DB에서 품질 필터를 통과한 후보를 조회합니다.
-3. LLM이 후보의 품질, 거리, 예산, 날씨, 카테고리 균형을 비교해 일정에 넣을 장소와 순서를 선택합니다.
-4. LLM 선택이 실패하거나 API 키가 없으면 규칙 기반 추천으로 fallback합니다.
+1. LangGraph `StateGraph`의 `validate_input` 노드가 입력값, 개인정보, 세션 메모리를 정리합니다.
+2. `analyze_intent` 노드가 LangChain `PydanticOutputParser`와 `TravelIntent` 모델로 사용자 의도를 구조화합니다.
+3. `retrieve_places` 노드가 로컬 JSON 장소 DB를 LangChain `Document` 형태로 변환하고 Retriever처럼 후보 문서를 검색합니다.
+4. `plan_route` 노드가 검색된 후보 문서 Context, 품질, 거리, 예산, 날씨, 카테고리 균형을 LLM에 전달해 동선을 선택합니다.
+5. `add_conditional_edges()` 조건 분기로 LLM 선택 실패 시 `fallback_route` 노드가 규칙 기반 추천을 실행합니다.
+6. `final_response` 노드가 거리/숙소/최종 문장을 계산하고 `TripPlan` Pydantic 모델로 구조화된 JSON 응답을 검증합니다.
+
+### LangGraph StateGraph
+
+현재 Agent 실행 그래프는 `app.py`의 `build_agent_graph()`에서 구성합니다. `thread_id`는 웹에서 전달하는 `session_id`를 사용하며, LangGraph `MemorySaver`가 설치된 환경에서는 그래프 체크포인터로도 연결됩니다. 아래 다이어그램은 `AGENT_GRAPH.get_graph().draw_mermaid()`로 확인 가능한 구조와 동일한 흐름입니다.
+
+```mermaid
+graph TD;
+    __start__([START]) --> validate_input
+    validate_input -- valid --> analyze_intent
+    validate_input -- errors --> final_response
+    analyze_intent --> retrieve_places
+    retrieve_places -- ok --> plan_route
+    retrieve_places -- errors --> final_response
+    plan_route -- LLM selected route --> final_response
+    plan_route -- empty or failed --> fallback_route
+    fallback_route --> final_response
+    final_response --> __end__([END])
+```
+
+### Memory
+
+웹은 브라우저 `localStorage`에 `session_id`를 저장하고 `/api/recommend` 요청마다 함께 전송합니다. 서버는 `SESSION_STORE`에 최근 6턴의 payload와 summary를 보관합니다. 사용자가 "아까 조건에서 카페만 바꿔줘", "이전 조건 유지하고 비 오는 날로 바꿔줘"처럼 말하면 이전 조건을 기본값으로 이어받고 새 입력만 덮어씁니다.
+
+### RAG
+
+장소 데이터는 `data/cheongju_places.json`의 로컬 DB에서 읽습니다. `retrieve_places` 노드는 후보 장소를 `Document(page_content, metadata)`로 변환한 뒤, 사용자 요청과 태그에 맞게 점수화된 후보를 LLM Context로 넘깁니다. 즉 흐름은 `사용자 요청 → 장소 DB 검색 → Document Context 생성 → LLM 동선 선택`입니다. 현재는 로컬 Retriever 방식이며, 필요하면 같은 `Document` 계층을 Chroma/FAISS VectorStore로 교체할 수 있습니다.
+
+### OutputParser
+
+의도 분석은 `TravelIntent(BaseModel)`, 최종 응답은 `TripPlan(BaseModel)`을 사용합니다. LangChain `PydanticOutputParser`가 설치되어 있으면 parser의 format instruction과 parse 검증을 사용하고, 미설치 환경에서는 같은 Pydantic 모델 검증으로 fallback합니다.
 
 ### Gemini 임시 실행
 
-OpenAI 키가 동작하지 않을 때는 임시 파일을 실행할 수 있습니다.
+OpenAI 대신 Gemini 모델로 같은 Agent 구조를 실행하려면 `app_gemini.py`를 사용합니다. `app.py`와 `app_gemini.py`는 LangGraph, 메모리, RAG, OutputParser, ODsay 대중교통 로직을 동일하게 유지하고 LLM 호출부만 다릅니다.
 
 ```powershell
 GEMINI_API_KEY=발급받은_GEMINI_API_KEY
@@ -59,7 +91,7 @@ GEMINI_MODEL=gemini-1.5-flash
 python app_gemini.py
 ```
 
-Gemini 임시 앱은 `http://127.0.0.1:5001`에서 실행됩니다. 원본 `app.py`는 OpenAI 버전으로 유지됩니다.
+Gemini 앱은 `http://127.0.0.1:5001`에서 실행됩니다. OpenAI 버전 `app.py`는 `http://127.0.0.1:5000`을 사용합니다.
 
 ## ODsay 대중교통 안내
 

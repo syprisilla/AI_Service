@@ -18,6 +18,8 @@
         </div>
 
         <form id="tripForm">
+          <input type="hidden" name="session_id" id="sessionId" />
+
           <label>
             출발지
             <select name="start_name">
@@ -119,6 +121,16 @@
           </section>
 
           <section>
+            <h3>Graph / Memory / RAG</h3>
+            <div class="agent-stats">
+              <span id="sessionInfo"></span>
+              <span id="memoryInfo"></span>
+              <span id="ragInfo"></span>
+              <span id="plannerInfo"></span>
+            </div>
+          </section>
+
+          <section>
             <h3>최적 동선</h3>
             <p id="routeText" class="route-text"></p>
           </section>
@@ -152,6 +164,13 @@
       const form = document.querySelector("#tripForm");
       const result = document.querySelector("#result");
       const emptyState = document.querySelector("#emptyState");
+      const sessionInput = document.querySelector("#sessionId");
+      const savedSessionId = localStorage.getItem("cheongjuTripSessionId");
+      const sessionId =
+        savedSessionId ||
+        `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      localStorage.setItem("cheongjuTripSessionId", sessionId);
+      sessionInput.value = sessionId;
 
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -190,6 +209,14 @@
           data.summary.ai_comment;
         document.querySelector("#routeText").textContent =
           data.summary.route_text;
+        document.querySelector("#sessionInfo").textContent =
+          `Session ${data.summary.session_id}`;
+        document.querySelector("#memoryInfo").textContent =
+          `Memory ${data.summary.memory_turns}턴`;
+        document.querySelector("#ragInfo").textContent =
+          `RAG Documents ${data.summary.rag_document_count}`;
+        document.querySelector("#plannerInfo").textContent =
+          data.summary.planner_mode;
 
         const accommodationSection = document.querySelector(
           "#accommodationSection",
@@ -225,7 +252,9 @@
             const moveInfo = leg
               ? leg.mode === "transit"
                 ? `<p class="move-info">🚌 ${leg.from} → ${leg.to} : 약 ${leg.move_minutes}분 (${leg.distance_km}km)</p>${transitOptions}`
-                : `<p class="move-info">🚶 ${leg.from} → ${leg.to} : 약 ${leg.move_minutes}분 (${leg.distance_km}km)</p>${leg.transit_error ? `<p class="move-info">${leg.transit_error}</p>` : ""}`
+                : leg.mode === "car"
+                  ? `<p class="move-info">🚗 ${leg.from} → ${leg.to} : 약 ${leg.move_minutes}분 (${leg.distance_km}km)</p>`
+                  : `<p class="move-info">🚶 ${leg.from} → ${leg.to} : 약 ${leg.move_minutes}분 (${leg.distance_km}km)</p>${leg.transit_error ? `<p class="move-info">${leg.transit_error}</p>` : ""}`
               : "";
 
             return `

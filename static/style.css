@@ -325,14 +325,16 @@ h3 {
 }
 
 .chips,
-.flow {
+.flow,
+.agent-stats {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
 .chips span,
-.flow span {
+.flow span,
+.agent-stats span {
   border-radius: 999px;
   padding: 7px 10px;
   background: var(--soft);

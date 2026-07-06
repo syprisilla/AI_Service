@@ -8,25 +8,64 @@ import xml.etree.ElementTree as ET
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from flask import Flask, jsonify, render_template, request
+
+try:
+    from pydantic import BaseModel, Field, ValidationError
+except ImportError:
+    ValidationError = ValueError
+
+    def Field(default: Any = None, default_factory: Any = None, **_: Any) -> Any:
+        return default_factory() if default_factory else default
+
+    class BaseModel:
+        def __init__(self, **data: Any) -> None:
+            annotations = getattr(self, "__annotations__", {})
+            for key, default in self.__class__.__dict__.items():
+                if key.startswith("_") or callable(default):
+                    continue
+                if key in annotations and key not in data:
+                    setattr(self, key, default)
+            for key in annotations:
+                if key in data:
+                    setattr(self, key, data[key])
+
+        @classmethod
+        def model_validate(cls, data: dict[str, Any]) -> Any:
+            return cls(**data)
+
+        def model_dump(self) -> dict[str, Any]:
+            return dict(self.__dict__)
+
+try:
+    from langchain_core.documents import Document
+    from langchain_core.output_parsers import PydanticOutputParser
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.graph import END, StateGraph
+except ImportError:
+    Document = None
+    PydanticOutputParser = None
+    MemorySaver = None
+    END = "__end__"
+    StateGraph = None
 
 
 app = Flask(__name__)
 
-# Temporary Gemini build.
-# app.py keeps the original OpenAI implementation; this file uses Gemini for
-# intent parsing, route planning, and final comments while preserving features.
+# Gemini build.
+# app.py와 같은 LangGraph/Memory/RAG/OutputParser 구조를 사용하고,
+# LLM 호출부만 Gemini API로 교체한 버전입니다.
+
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 PLACE_DB_PATH = DATA_DIR / "cheongju_places.json"
 
 
-def load_env_file(override: bool = False) -> None:
+def load_env_file() -> None:
     env_path = BASE_DIR / ".env"
     if not env_path.exists():
         return
@@ -35,10 +74,7 @@ def load_env_file(override: bool = False) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        env_key = key.strip()
-        env_value = value.strip().strip('"').strip("'")
-        if override or not os.environ.get(env_key):
-            os.environ[env_key] = env_value
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 load_env_file()
@@ -642,6 +678,7 @@ def save_place_db(
     errors: list[str] | None = None,
     source_counts: dict[str, int] | None = None,
 ) -> None:
+    global PLACE_DB_CACHE
     DATA_DIR.mkdir(exist_ok=True)
     payload = {
         "city": "청주",
@@ -652,6 +689,7 @@ def save_place_db(
         "places": places,
     }
     PLACE_DB_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    PLACE_DB_CACHE = None
 
 
 def source_counter(places: list[dict[str, Any]]) -> dict[str, int]:
@@ -668,10 +706,15 @@ def source_summary(places: list[dict[str, Any]]) -> str:
 
 
 def load_place_db() -> list[dict[str, Any]]:
+    global PLACE_DB_CACHE
+    if PLACE_DB_CACHE is not None:
+        return PLACE_DB_CACHE
     if not PLACE_DB_PATH.exists():
-        return sync_place_db()
+        PLACE_DB_CACHE = sync_place_db()
+        return PLACE_DB_CACHE
     payload = json.loads(PLACE_DB_PATH.read_text(encoding="utf-8"))
-    return sanitize_place_db(payload.get("places", []) + LOCAL_FALLBACK_PLACES)
+    PLACE_DB_CACHE = sanitize_place_db(payload.get("places", []) + LOCAL_FALLBACK_PLACES)
+    return PLACE_DB_CACHE
 
 
 def sanitize_place_db(places: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -912,7 +955,7 @@ def parse_odsay_path(path: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def odsay_transit_options(start: dict[str, float], end: dict[str, float]) -> tuple[list[dict[str, Any]], str | None]:
-    load_env_file(override=True)
+    load_env_file()
     api_key = os.getenv("ODSAY_API_KEY") or os.getenv("ODSAY_KEY")
     if not api_key:
         return [], "ODSAY_API_KEY 없음"
@@ -952,11 +995,14 @@ def odsay_transit_options(start: dict[str, float], end: dict[str, float]) -> tup
         option = parse_odsay_path(path)
         if option:
             options.append(option)
+        if len(options) >= TRANSIT_OPTION_LIMIT:
+            break
 
-    options = sorted(options, key=lambda item: (item["total_time"], item.get("payment", 0)))[:TRANSIT_OPTION_LIMIT]
-    cache[key] = options
-    save_odsay_cache(cache)
-    return options, None
+    if options:
+        cache[key] = options
+        save_odsay_cache(cache)
+        return options, None
+    return [], "ODsay 대중교통 경로 없음"
 
 
 ACCOMMODATION_DB = [
@@ -993,8 +1039,8 @@ ACCOMMODATION_DB = [
 ]
 
 
-@dataclass
-class AgentState:
+class AgentState(TypedDict):
+    session_id: str
     start_name: str
     start_point: dict[str, float]
     duration: str
@@ -1004,6 +1050,80 @@ class AgentState:
     weather: str
     tags: list[str]
     warnings: list[str]
+    memory_context: list[dict[str, Any]]
+
+
+class AgentGraphState(TypedDict, total=False):
+    payload: dict[str, Any]
+    state: AgentState
+    errors: list[str]
+    status: int
+    tags: list[str]
+    intent: dict[str, Any]
+    intent_mode: str
+    slots: list[dict[str, Any]]
+    candidates: list[dict[str, Any]]
+    retrieved_documents: list[dict[str, Any]]
+    recommended: list[dict[str, Any]]
+    planner_mode: str
+    planner_decision: dict[str, Any]
+    accommodation: dict[str, Any] | None
+    legs: list[dict[str, Any]]
+    result: dict[str, Any]
+
+
+class TravelIntent(BaseModel):
+    tags: list[str] = Field(default_factory=list)
+    must_have: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
+    pace: Literal["느긋", "보통", "빡빡"] = "보통"
+    intent_summary: str = "규칙 기반 태그 분석"
+
+
+class TripSummary(BaseModel):
+    title: str
+    tags: list[str]
+    route_text: str
+    total_cost: int
+    budget: int
+    total_distance: float
+    total_move_minutes: int
+    finish: str
+    weather: str
+    transport: str
+    ai_comment: str
+    ai_mode: str
+    planner_mode: str
+    intent: dict[str, Any] = Field(default_factory=dict)
+    planner_decision_summary: str | None = None
+    lodging_cost: int = 0
+    session_id: str
+    memory_turns: int = 0
+    rag_document_count: int = 0
+
+
+class TripPlan(BaseModel):
+    summary: TripSummary
+    schedule: list[dict[str, Any]]
+    accommodation: dict[str, Any] | None = None
+    places: list[dict[str, Any]]
+    legs: list[dict[str, Any]]
+    warnings: list[str]
+    agent_flow: list[str]
+
+
+INTENT_OUTPUT_PARSER = PydanticOutputParser(pydantic_object=TravelIntent) if PydanticOutputParser else None
+TRIP_OUTPUT_PARSER = PydanticOutputParser(pydantic_object=TripPlan) if PydanticOutputParser else None
+GRAPH_MEMORY = MemorySaver() if MemorySaver else None
+SESSION_STORE: dict[str, list[dict[str, Any]]] = {}
+PLACE_DB_CACHE: list[dict[str, Any]] | None = None
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def remove_private_info(text: str) -> tuple[str, list[str]]:
@@ -1015,27 +1135,95 @@ def remove_private_info(text: str) -> tuple[str, list[str]]:
     return sanitized, warnings
 
 
+def normalize_session_id(raw_session_id: Any) -> str:
+    session_id = str(raw_session_id or "default").strip()
+    session_id = re.sub(r"[^a-zA-Z0-9_.:-]", "-", session_id)
+    return session_id[:80] or "default"
+
+
+def latest_session_payload(session_id: str) -> dict[str, Any]:
+    history = SESSION_STORE.get(session_id, [])
+    for item in reversed(history):
+        if isinstance(item.get("payload"), dict):
+            return dict(item["payload"])
+    return {}
+
+
+def merge_memory_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    session_id = normalize_session_id(payload.get("session_id"))
+    history = SESSION_STORE.get(session_id, [])
+    previous_payload = latest_session_payload(session_id)
+    if not previous_payload:
+        return {**payload, "session_id": session_id}, history
+
+    style_text = str(payload.get("style_text", "")).strip()
+    memory_terms = ("아까", "이전", "방금", "그 조건", "저번", "기존", "바꿔", "변경", "만 바꿔")
+    should_merge = any(term in style_text for term in memory_terms)
+    if not should_merge:
+        return {**payload, "session_id": session_id}, history
+
+    merged = {**previous_payload, **{key: value for key, value in payload.items() if value not in (None, "")}}
+    if any(term in style_text for term in ("비", "우천", "장마")):
+        merged["weather"] = "비"
+    elif "더움" in style_text or "더운" in style_text:
+        merged["weather"] = "더움"
+    elif "추움" in style_text or "추운" in style_text:
+        merged["weather"] = "추움"
+
+    if "자동차" in style_text or "차로" in style_text:
+        merged["transport"] = "자동차"
+    elif "도보" in style_text or "걸어서" in style_text:
+        merged["transport"] = "도보 중심"
+    elif "대중교통" in style_text or "버스" in style_text:
+        merged["transport"] = "대중교통"
+
+    if "1박" in style_text or "하룻밤" in style_text:
+        merged["duration"] = "1박 2일"
+    elif "당일" in style_text:
+        merged["duration"] = "당일치기"
+    merged["session_id"] = session_id
+    return merged, history
+
+
+def remember_turn(session_id: str, payload: dict[str, Any], result: dict[str, Any]) -> None:
+    history = SESSION_STORE.setdefault(session_id, [])
+    history.append(
+        {
+            "payload": {
+                key: payload.get(key)
+                for key in ["session_id", "start_name", "duration", "style_text", "transport", "budget", "weather"]
+            },
+            "summary": result.get("summary", {}),
+        }
+    )
+    del history[:-6]
+
+
 def validate_and_normalize(payload: dict[str, Any]) -> tuple[AgentState | None, list[str]]:
     warnings: list[str] = []
-    style_text, privacy_warnings = remove_private_info(str(payload.get("style_text", "")).strip())
+    merged_payload, memory_context = merge_memory_payload(payload)
+    session_id = normalize_session_id(merged_payload.get("session_id"))
+    style_text, privacy_warnings = remove_private_info(str(merged_payload.get("style_text", "")).strip())
     warnings.extend(privacy_warnings)
+    if memory_context:
+        warnings.append(f"Session Memory: {session_id}의 최근 {len(memory_context)}턴 대화 이력을 참고했습니다.")
 
-    start_name = str(payload.get("start_name", "")).strip()
+    start_name = str(merged_payload.get("start_name", "")).strip()
     if start_name not in START_POINTS:
         warnings.append(
             "Fallback Middleware: 입력한 출발지를 찾을 수 없어 청주고속버스터미널로 계산했습니다."
         )
         start_name = "청주고속버스터미널"
 
-    duration = str(payload.get("duration", "당일치기")).strip()
-    transport = str(payload.get("transport", "대중교통")).strip()
-    weather = str(payload.get("weather", "맑음")).strip()
+    duration = str(merged_payload.get("duration", "당일치기")).strip()
+    transport = str(merged_payload.get("transport", "대중교통")).strip()
+    weather = str(merged_payload.get("weather", "맑음")).strip()
 
     if not style_text:
         return None, ["여행 스타일을 하나 이상 입력해주세요."]
 
     try:
-        budget = int(str(payload.get("budget", "0")).replace(",", "").strip())
+        budget = int(str(merged_payload.get("budget", "0")).replace(",", "").strip())
     except ValueError:
         return None, ["예산은 숫자로 입력해주세요."]
 
@@ -1050,17 +1238,19 @@ def validate_and_normalize(payload: dict[str, Any]) -> tuple[AgentState | None, 
         duration = "당일치기"
         warnings.append("여행 기간 값이 올바르지 않아 당일치기 기준으로 계산했습니다.")
 
-    state = AgentState(
-        start_name=start_name,
-        start_point=START_POINTS[start_name],
-        duration=duration,
-        style_text=style_text,
-        transport=transport,
-        budget=budget,
-        weather=weather,
-        tags=[],
-        warnings=warnings,
-    )
+    state: AgentState = {
+        "session_id": session_id,
+        "start_name": start_name,
+        "start_point": START_POINTS[start_name],
+        "duration": duration,
+        "style_text": style_text,
+        "transport": transport,
+        "budget": budget,
+        "weather": weather,
+        "tags": [],
+        "warnings": warnings,
+        "memory_context": memory_context[-6:],
+    }
     return state, []
 
 
@@ -1107,9 +1297,6 @@ def extract_gemini_text(data: dict[str, Any]) -> str:
 
 
 def gemini_json_tool(prompt: str, temperature: float = 0.2, timeout: int = 18) -> tuple[dict[str, Any] | None, str]:
-    # Original app.py uses OpenAI Responses API here. This temporary copy keeps
-    # the same caller contract but sends the prompt to Gemini instead.
-    load_env_file(override=True)
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
         return None, "GEMINI_API_KEY 없음"
@@ -1153,19 +1340,30 @@ def gemini_json_tool(prompt: str, temperature: float = 0.2, timeout: int = 18) -
 
 
 def llm_intent_tool(state: AgentState) -> tuple[list[str], dict[str, Any], str]:
-    fallback_tags = style_analysis_tool(state.style_text)
+    fallback_tags = style_analysis_tool(state["style_text"])
+    format_instructions = (
+        INTENT_OUTPUT_PARSER.get_format_instructions()
+        if INTENT_OUTPUT_PARSER
+        else "JSON 스키마: {\"tags\":[\"...\"],\"must_have\":[\"...\"],\"avoid\":[\"...\"],\"pace\":\"느긋|보통|빡빡\",\"intent_summary\":\"짧은 한국어 요약\"}."
+    )
     prompt = (
         "너는 청주 여행 Agent의 의도 해석기다. 사용자의 자연어 입력을 여행 선호 태그와 제약으로 해석해라. "
         "반드시 JSON 객체만 출력해라. tags는 아래 허용 태그 중 필요한 것만 골라라: "
         f"{list(STYLE_KEYWORDS.keys())}. "
-        "JSON 스키마: {\"tags\":[\"...\"],\"must_have\":[\"...\"],\"avoid\":[\"...\"],"
-        "\"pace\":\"느긋|보통|빡빡\",\"intent_summary\":\"짧은 한국어 요약\"}.\n\n"
-        f"사용자 입력: {state.style_text}\n"
-        f"기간: {state.duration}, 이동수단: {state.transport}, 날씨: {state.weather}, 예산: {state.budget}"
+        f"{format_instructions}\n\n"
+        f"이전 대화 메모리: {json.dumps(state.get('memory_context', []), ensure_ascii=False)}\n"
+        f"사용자 입력: {state['style_text']}\n"
+        f"기간: {state['duration']}, 이동수단: {state['transport']}, 날씨: {state['weather']}, 예산: {state['budget']}"
     )
     parsed, mode = gemini_json_tool(prompt)
     if not parsed:
         return fallback_tags, {"intent_summary": "규칙 기반 태그 분석", "must_have": [], "avoid": []}, f"의도 해석 Fallback: {mode}"
+
+    try:
+        intent_model = INTENT_OUTPUT_PARSER.parse(json.dumps(parsed, ensure_ascii=False)) if INTENT_OUTPUT_PARSER else TravelIntent.model_validate(parsed)
+        parsed = intent_model.model_dump()
+    except (ValidationError, ValueError) as error:
+        return fallback_tags, {"intent_summary": f"Pydantic OutputParser 검증 실패: {error}", "must_have": [], "avoid": []}, "의도 해석 OutputParser Fallback"
 
     allowed = set(STYLE_KEYWORDS)
     tags = [str(tag).strip() for tag in parsed.get("tags", []) if str(tag).strip() in allowed]
@@ -1638,16 +1836,16 @@ def recommendation_tool(
 def candidate_lookup_tool(
     state: AgentState,
     tags: list[str],
-    max_candidates: int = 28,
+    max_candidates: int = 48,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    slots = itinerary_slots(state.duration)
-    if state.transport == "도보 중심" and state.duration == "당일치기":
+    slots = itinerary_slots(state["duration"])
+    if state["transport"] == "도보 중심" and state["duration"] == "당일치기":
         slots = slots[:4]
 
     places: list[dict[str, Any]] = []
     place_db = load_place_db()
     target_count = len(slots)
-    per_place_budget = max(1, state.budget / max(1, target_count))
+    per_place_budget = max(1, state["budget"] / max(1, target_count))
 
     for place in place_db:
         quality = float(place.get("quality_score") or place_quality_score(place))
@@ -1657,16 +1855,16 @@ def candidate_lookup_tool(
             continue
 
         matched_tags = sorted(set(tags).intersection(place["tags"]))
-        start_distance = haversine_km(state.start_point, place)
+        start_distance = haversine_km(state["start_point"], place)
         budget_penalty = 1.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
         score = (
             place["score"]
             + min(quality, 6.0) * 0.35
             + len(matched_tags) * 2
-            + weather_filter_score(place, state.weather)
+            + weather_filter_score(place, state["weather"])
             + indoor_preference_score(place, tags)
             + category_preference_score(place, tags)
-            + start_proximity_score(start_distance, state.transport)
+            + start_proximity_score(start_distance, state["transport"])
             - budget_penalty
             - repeated_cafe_penalty(place)
             - pet_care_penalty(place, tags)
@@ -1696,7 +1894,7 @@ def candidate_lookup_tool(
     selected_names: set[str] = set()
     for slot in slots:
         slot_candidates = [place for place in ranked if place["name"] not in selected_names and role_matches(place, slot["role"])]
-        for place in slot_candidates[:4]:
+        for place in slot_candidates[:8]:
             selected.append(place)
             selected_names.add(place["name"])
 
@@ -1710,6 +1908,40 @@ def candidate_lookup_tool(
     return slots, selected[:max_candidates]
 
 
+def place_to_document(place: dict[str, Any]) -> Any:
+    page_content = (
+        f"{place.get('name', '')}\n"
+        f"category={place.get('category', '')}; role={place.get('role', '')}; "
+        f"tags={', '.join(place.get('tags', []))}; address={place.get('address', '')}; "
+        f"source={place.get('source', '')}; score={place.get('score', '')}"
+    )
+    metadata = {
+        "name": place.get("name"),
+        "category": place.get("category"),
+        "role": place.get("role"),
+        "tags": place.get("tags", []),
+        "source": place.get("source"),
+        "address": place.get("address"),
+    }
+    if Document:
+        return Document(page_content=page_content, metadata=metadata)
+    return {"page_content": page_content, "metadata": metadata}
+
+
+def document_to_context(document: Any) -> dict[str, Any]:
+    if Document and isinstance(document, Document):
+        return {"page_content": document.page_content, "metadata": document.metadata}
+    return {
+        "page_content": document.get("page_content", ""),
+        "metadata": document.get("metadata", {}),
+    }
+
+
+def retrieve_place_documents(candidates: list[dict[str, Any]], max_documents: int = 12) -> list[dict[str, Any]]:
+    documents = [place_to_document(place) for place in candidates[:max_documents]]
+    return [document_to_context(document) for document in documents]
+
+
 def compact_candidate_for_llm(index: int, place: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": index,
@@ -1718,10 +1950,12 @@ def compact_candidate_for_llm(index: int, place: dict[str, Any]) -> dict[str, An
         "role": place.get("role"),
         "cost": place["cost"],
         "indoor": place["indoor"],
+        "tags": place["tags"],
         "matched_tags": place.get("matched_tags", []),
         "quality_score": place.get("quality_score"),
         "agent_score": place.get("agent_score"),
         "start_distance_km": place.get("start_distance_km"),
+        "address": place.get("address"),
         "source": place.get("source"),
         "phone_exists": bool(place.get("phone")),
         "map_exists": bool(place.get("map_url") or place.get("url")),
@@ -1769,6 +2003,7 @@ def llm_route_planner_tool(
     intent: dict[str, Any],
     slots: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
+    retrieved_documents: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     if not candidates:
         return [], "후보 없음 Fallback", {}
@@ -1787,15 +2022,17 @@ def llm_route_planner_tool(
         "\"slot_label\":\"점심\",\"reason\":\"선택 이유\"}],\"decision_summary\":\"판단 요약\","
         "\"rejected_notes\":[\"제외 판단\"]}.\n"
         "selected 개수는 slots 개수를 넘기지 말고, 예산 안에 최대한 맞춰라.\n\n"
-        f"사용자 요청: {state.style_text}\n"
+        f"사용자 요청: {state['style_text']}\n"
+        f"대화 메모리: {json.dumps(state.get('memory_context', []), ensure_ascii=False)}\n"
         f"LLM 의도 해석: {json.dumps(intent, ensure_ascii=False)}\n"
         f"태그: {tags}\n"
-        f"출발지: {state.start_name}, 기간: {state.duration}, 이동수단: {state.transport}, "
-        f"날씨: {state.weather}, 예산: {state.budget}\n"
+        f"출발지: {state['start_name']}, 기간: {state['duration']}, 이동수단: {state['transport']}, "
+        f"날씨: {state['weather']}, 예산: {state['budget']}\n"
         f"필요 슬롯: {json.dumps(slots, ensure_ascii=False)}\n"
+        f"RAG 검색 문서 Context: {json.dumps(retrieved_documents or [], ensure_ascii=False)}\n"
         f"후보 목록: {json.dumps(compact_candidates, ensure_ascii=False)}"
     )
-    parsed, mode = gemini_json_tool(prompt, temperature=0.25, timeout=60)
+    parsed, mode = gemini_json_tool(prompt, temperature=0.25, timeout=25)
     if not parsed:
         return [], f"LLM 동선 선택 Fallback: {mode}", {}
 
@@ -1939,7 +2176,7 @@ def distance_tool(
                 transit_error = "당일치기 버스 이용 최대 2회 조건으로 도보 이동 처리"
         else:
             move_minutes = max(5, round(distance / speed * 60))
-
+            mode = "car" if transport == "자동차" else "walk"
         legs.append(
             {
                 "from": current_name,
@@ -1963,25 +2200,25 @@ def accommodation_tool(
     route: list[dict[str, Any]],
     place_cost: int,
 ) -> dict[str, Any] | None:
-    if state.duration != "1박 2일":
+    if state["duration"] != "1박 2일":
         return None
 
     day1_places = [place for place in route if place.get("day", 1) == 1]
-    day1_last_place = day1_places[-1] if day1_places else (route[0] if route else state.start_point)
-    remaining_budget = max(0, state.budget - place_cost)
+    day1_last_place = day1_places[-1] if day1_places else (route[0] if route else state["start_point"])
+    remaining_budget = max(0, state["budget"] - place_cost)
 
     candidates = []
     for accommodation in ACCOMMODATION_DB:
         distance = haversine_km(day1_last_place, accommodation)
         budget_penalty = 3 if accommodation["cost"] > remaining_budget else 0
-        transport_bonus = 1.0 if state.transport in accommodation["tags"] or "교통" in accommodation["tags"] else 0
+        transport_bonus = 1.0 if state["transport"] in accommodation["tags"] or "교통" in accommodation["tags"] else 0
         score = accommodation["score"] + transport_bonus - distance * 0.25 - budget_penalty
         candidates.append(
             {
                 **accommodation,
                 "distance_from_day1_km": round(distance, 2),
                 "agent_score": round(score, 2),
-                "matched_tags": sorted(set(state.tags).intersection(accommodation["tags"])),
+                "matched_tags": sorted(set(state["tags"]).intersection(accommodation["tags"])),
             }
         )
 
@@ -2065,6 +2302,7 @@ def output_parser(
     planner_mode: str = "규칙 기반 추천",
     intent: dict[str, Any] | None = None,
     planner_decision: dict[str, Any] | None = None,
+    rag_document_count: int = 0,
 ) -> dict[str, Any]:
     place_cost = sum(place["cost"] for place in route)
     accommodation = accommodation if accommodation is not None else accommodation_tool(state, route, place_cost)
@@ -2082,36 +2320,39 @@ def output_parser(
         total_move_minutes,
         accommodation,
     )
-    route_names = [state.start_name] + [place["name"] for place in route]
+    route_names = [state["start_name"]] + [place["name"] for place in route]
     if accommodation:
         split_index = next((index for index, place in enumerate(route) if place.get("day", 1) == 2), len(route))
         route_names = (
-            [state.start_name]
+            [state["start_name"]]
             + [place["name"] for place in route[:split_index]]
             + [f"{accommodation['name']}(숙소)"]
             + [place["name"] for place in route[split_index:]]
         )
 
-    return {
+    raw_result = {
         "summary": {
             "title": "Cheongju Trip Agent 추천 결과",
-            "tags": state.tags,
+            "tags": state["tags"],
             "route_text": " → ".join(route_names),
             "total_cost": total_cost,
-            "budget": state.budget,
+            "budget": state["budget"],
             "total_distance": total_distance,
             "total_move_minutes": total_move_minutes,
             "finish": finish,
-            "weather": state.weather,
-            "transport": state.transport,
+            "weather": state["weather"],
+            "transport": state["transport"],
             "ai_comment": ai_comment,
             "ai_mode": ai_mode,
             "planner_mode": planner_mode,
             "intent": intent or {},
             "planner_decision_summary": (planner_decision or {}).get("decision_summary"),
             "lodging_cost": lodging_cost,
+            "session_id": state["session_id"],
+            "memory_turns": len(state.get("memory_context", [])),
+            "rag_document_count": rag_document_count,
         },
-        "schedule": build_schedule(route, legs, state.duration, accommodation),
+        "schedule": build_schedule(route, legs, state["duration"], accommodation),
         "accommodation": accommodation,
         "places": [
             {
@@ -2139,26 +2380,42 @@ def output_parser(
             for place in route
         ],
         "legs": legs,
-        "warnings": state.warnings,
+        "warnings": state["warnings"],
         "agent_flow": [
+            "LangGraph StateGraph: validate_input",
             "입력 검증 Middleware",
             "개인정보 제거 Middleware",
+            "Session Memory 병합",
             "Fallback Middleware",
+            "LangGraph StateGraph: analyze_intent",
+            "LangChain PydanticOutputParser: TravelIntent",
             "LLM 여행 의도 해석 Tool",
-            "장소 후보 조회 Tool",
+            "LangGraph StateGraph: retrieve_places",
+            "로컬 JSON 장소 DB → LangChain Document Retriever",
+            "검색된 후보를 LLM Context로 제공",
             "품질/실재성 필터 Tool",
+            "LangGraph StateGraph: plan_route",
             "LLM 후보 비교/동선 선택 Tool",
+            "add_conditional_edges: LLM 실패 시 fallback_route",
+            "LangGraph StateGraph: fallback_route",
             "규칙 기반 Fallback Tool",
             "로컬 JSON 장소 DB",
             "날씨 대응 Tool",
+            "LangGraph StateGraph: final_response",
             "거리 계산 Tool",
             "동선 최적화 Tool",
             "숙소 추천 Tool",
             "Context 생성",
             "LLM 응답 생성 Tool",
-            "Output Parser",
+            "LangChain PydanticOutputParser: TripPlan",
         ],
     }
+    try:
+        parsed_result = TRIP_OUTPUT_PARSER.parse(json.dumps(raw_result, ensure_ascii=False)) if TRIP_OUTPUT_PARSER else TripPlan.model_validate(raw_result)
+        return parsed_result.model_dump()
+    except (ValidationError, ValueError) as error:
+        raw_result["warnings"].append(f"TripPlan OutputParser 검증 실패: {error}")
+        return raw_result
 
 
 def build_llm_context(
@@ -2183,13 +2440,15 @@ def build_llm_context(
     ]
     context = {
         "user_request": {
-            "start": state.start_name,
-            "duration": state.duration,
-            "style_text": state.style_text,
-            "tags": state.tags,
-            "transport": state.transport,
-            "budget": state.budget,
-            "weather": state.weather,
+            "session_id": state["session_id"],
+            "start": state["start_name"],
+            "duration": state["duration"],
+            "style_text": state["style_text"],
+            "tags": state["tags"],
+            "transport": state["transport"],
+            "budget": state["budget"],
+            "weather": state["weather"],
+            "memory_context": state.get("memory_context", []),
         },
         "optimized_route": [place["name"] for place in route],
         "places": places,
@@ -2202,16 +2461,23 @@ def build_llm_context(
     return json.dumps(context, ensure_ascii=False, indent=2)
 
 
-def extract_openai_text(data: dict[str, Any]) -> str:
-    if data.get("output_text"):
-        return str(data["output_text"]).strip()
-
-    text_parts: list[str] = []
-    for output in data.get("output", []):
-        for content in output.get("content", []):
-            if content.get("type") in {"output_text", "text"} and content.get("text"):
-                text_parts.append(str(content["text"]))
-    return "\n".join(text_parts).strip()
+def fast_final_comment(
+    state: AgentState,
+    route: list[dict[str, Any]],
+    total_cost: int,
+    total_distance: float,
+    total_move_minutes: int,
+    accommodation: dict[str, Any] | None = None,
+) -> str:
+    route_preview = " → ".join(place["name"] for place in route[:3])
+    if len(route) > 3:
+        route_preview += " → ..."
+    lodging_note = f" 마지막은 {accommodation['name']} 체크인까지 이어집니다." if accommodation else ""
+    return (
+        f"{state['weather']} 날씨와 {state['transport']} 이동을 기준으로 {route_preview} 순서가 가장 무난합니다. "
+        f"예상 비용은 {total_cost:,}원, 이동은 약 {total_move_minutes}분/{total_distance}km입니다."
+        f"{lodging_note}"
+    )
 
 
 def llm_response_tool(
@@ -2223,6 +2489,12 @@ def llm_response_tool(
     total_move_minutes: int,
     accommodation: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
+    if not env_flag("ENABLE_FINAL_LLM", default=False):
+        return (
+            fast_final_comment(state, route, total_cost, total_distance, total_move_minutes, accommodation),
+            "빠른 로컬 응답",
+        )
+
     context = build_llm_context(
         state,
         route,
@@ -2232,9 +2504,6 @@ def llm_response_tool(
         total_move_minutes,
         accommodation,
     )
-    # Original app.py uses OpenAI Responses API here. This temporary copy uses
-    # Gemini for the same final-comment role.
-    load_env_file(override=True)
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
         return (
@@ -2290,69 +2559,180 @@ def llm_response_tool(
         )
 
 
-def run_agent(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    state, errors = validate_and_normalize(payload)
+def validate_input_node(graph_state: AgentGraphState) -> AgentGraphState:
+    state, errors = validate_and_normalize(graph_state["payload"])
     if errors:
-        return {"errors": errors}, 400
-
+        return {"errors": errors, "status": 400, "result": {"errors": errors}}
     assert state is not None
-    state.tags, intent, intent_mode = llm_intent_tool(state)
+    return {"state": state, "errors": [], "status": 200}
+
+
+def analyze_intent_node(graph_state: AgentGraphState) -> AgentGraphState:
+    state = graph_state["state"]
+    tags, intent, intent_mode = llm_intent_tool(state)
+    state["tags"] = tags
+    return {"state": state, "tags": tags, "intent": intent, "intent_mode": intent_mode}
+
+
+def retrieve_places_node(graph_state: AgentGraphState) -> AgentGraphState:
+    state = graph_state["state"]
+    tags = graph_state.get("tags", state["tags"])
     try:
-        slots, candidates = candidate_lookup_tool(state, state.tags)
-        recommended, planner_mode, planner_decision = llm_route_planner_tool(
-            state,
-            state.tags,
-            intent,
-            slots,
-            candidates,
-        )
-        if not recommended:
-            recommended = recommendation_tool(
-                state.tags,
-                state.budget,
-                state.weather,
-                state.duration,
-                state.start_point,
-                state.transport,
-            )
-            planner_decision = {
-                "decision_summary": "LLM 동선 선택을 사용할 수 없어 규칙 기반 추천으로 대체했습니다.",
-            }
+        slots, candidates = candidate_lookup_tool(state, tags)
     except RuntimeError as error:
-        return {
-            "errors": [
-                str(error),
-                (
-                    "TourAPI를 사용하려면 TOUR_API_KEY 또는 TOURAPI_SERVICE_KEY 환경변수를 설정한 뒤 "
-                    "/api/places/sync를 호출하세요."
-                ),
-            ]
-        }, 503
+        errors = [
+            str(error),
+            (
+                "TourAPI를 사용하려면 TOUR_API_KEY 또는 TOURAPI_SERVICE_KEY 환경변수를 설정한 뒤 "
+                "/api/places/sync를 호출하세요."
+            ),
+        ]
+        return {"errors": errors, "status": 503, "result": {"errors": errors}}
+    return {
+        "slots": slots,
+        "candidates": candidates,
+        "retrieved_documents": retrieve_place_documents(candidates),
+    }
 
-    if not recommended:
-        return {
-            "errors": [
-                "로컬 JSON DB에 추천 가능한 청주 장소가 없습니다.",
-                "/api/places/sync로 장소 데이터를 다시 수집해 주세요.",
-            ]
-        }, 503
 
-    route = recommended
-    if "Fallback" in planner_mode:
-        state.warnings.append(planner_mode)
-    else:
-        state.warnings.append(f"{intent_mode} / {planner_mode}")
-    accommodation = accommodation_tool(state, route, sum(place["cost"] for place in route))
-    legs = distance_tool(state.start_point, route, state.transport, state.duration, accommodation)
-    return output_parser(
+def plan_route_node(graph_state: AgentGraphState) -> AgentGraphState:
+    state = graph_state["state"]
+    recommended, planner_mode, planner_decision = llm_route_planner_tool(
         state,
-        route,
+        graph_state.get("tags", state["tags"]),
+        graph_state.get("intent", {}),
+        graph_state.get("slots", []),
+        graph_state.get("candidates", []),
+        graph_state.get("retrieved_documents", []),
+    )
+    return {
+        "recommended": recommended,
+        "planner_mode": planner_mode,
+        "planner_decision": planner_decision,
+    }
+
+
+def fallback_route_node(graph_state: AgentGraphState) -> AgentGraphState:
+    state = graph_state["state"]
+    recommended = recommendation_tool(
+        graph_state.get("tags", state["tags"]),
+        state["budget"],
+        state["weather"],
+        state["duration"],
+        state["start_point"],
+        state["transport"],
+    )
+    return {
+        "recommended": recommended,
+        "planner_mode": graph_state.get("planner_mode") or "규칙 기반 Fallback",
+        "planner_decision": {
+            "decision_summary": "LLM 동선 선택을 사용할 수 없어 규칙 기반 추천으로 대체했습니다.",
+        },
+    }
+
+
+def final_response_node(graph_state: AgentGraphState) -> AgentGraphState:
+    if graph_state.get("result") and graph_state.get("status", 200) != 200:
+        return graph_state
+
+    state = graph_state["state"]
+    recommended = graph_state.get("recommended", [])
+    if not recommended:
+        errors = [
+            "로컬 JSON DB에 추천 가능한 청주 장소가 없습니다.",
+            "/api/places/sync로 장소 데이터를 다시 수집해 주세요.",
+        ]
+        return {"errors": errors, "status": 503, "result": {"errors": errors}}
+
+    planner_mode = graph_state.get("planner_mode", "규칙 기반 추천")
+    if "Fallback" in planner_mode:
+        state["warnings"].append(planner_mode)
+    else:
+        state["warnings"].append(f"{graph_state.get('intent_mode', '규칙 기반 의도 해석')} / {planner_mode}")
+
+    accommodation = accommodation_tool(state, recommended, sum(place["cost"] for place in recommended))
+    legs = distance_tool(state["start_point"], recommended, state["transport"], state["duration"], accommodation)
+    result = output_parser(
+        state,
+        recommended,
         legs,
         accommodation,
         planner_mode=planner_mode,
-        intent=intent,
-        planner_decision=planner_decision,
-    ), 200
+        intent=graph_state.get("intent", {}),
+        planner_decision=graph_state.get("planner_decision", {}),
+        rag_document_count=len(graph_state.get("retrieved_documents", [])),
+    )
+    remember_turn(state["session_id"], graph_state["payload"], result)
+    return {"state": state, "accommodation": accommodation, "legs": legs, "result": result, "status": 200}
+
+
+def route_after_validate(graph_state: AgentGraphState) -> str:
+    return "final_response" if graph_state.get("errors") else "analyze_intent"
+
+
+def route_after_retrieve(graph_state: AgentGraphState) -> str:
+    return "final_response" if graph_state.get("errors") else "plan_route"
+
+
+def route_after_plan(graph_state: AgentGraphState) -> str:
+    return "fallback_route" if not graph_state.get("recommended") else "final_response"
+
+
+def build_agent_graph() -> Any:
+    if StateGraph is None:
+        return None
+    graph_builder = StateGraph(AgentGraphState)
+    graph_builder.add_node("validate_input", validate_input_node)
+    graph_builder.add_node("analyze_intent", analyze_intent_node)
+    graph_builder.add_node("retrieve_places", retrieve_places_node)
+    graph_builder.add_node("plan_route", plan_route_node)
+    graph_builder.add_node("fallback_route", fallback_route_node)
+    graph_builder.add_node("final_response", final_response_node)
+    graph_builder.set_entry_point("validate_input")
+    graph_builder.add_conditional_edges(
+        "validate_input",
+        route_after_validate,
+        {"analyze_intent": "analyze_intent", "final_response": "final_response"},
+    )
+    graph_builder.add_edge("analyze_intent", "retrieve_places")
+    graph_builder.add_conditional_edges(
+        "retrieve_places",
+        route_after_retrieve,
+        {"plan_route": "plan_route", "final_response": "final_response"},
+    )
+    graph_builder.add_conditional_edges(
+        "plan_route",
+        route_after_plan,
+        {"fallback_route": "fallback_route", "final_response": "final_response"},
+    )
+    graph_builder.add_edge("fallback_route", "final_response")
+    graph_builder.add_edge("final_response", END)
+    return graph_builder.compile(checkpointer=GRAPH_MEMORY) if GRAPH_MEMORY else graph_builder.compile()
+
+
+AGENT_GRAPH = build_agent_graph()
+
+
+def run_agent(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    initial_state: AgentGraphState = {"payload": payload}
+    if AGENT_GRAPH is None:
+        graph_state = dict(initial_state)
+        graph_state.update(validate_input_node(graph_state))
+        if graph_state.get("errors"):
+            return graph_state["result"], graph_state.get("status", 400)
+        graph_state.update(analyze_intent_node(graph_state))
+        graph_state.update(retrieve_places_node(graph_state))
+        if graph_state.get("errors"):
+            return graph_state["result"], graph_state.get("status", 503)
+        graph_state.update(plan_route_node(graph_state))
+        if not graph_state.get("recommended"):
+            graph_state.update(fallback_route_node(graph_state))
+        graph_state.update(final_response_node(graph_state))
+    else:
+        session_id = normalize_session_id(payload.get("session_id"))
+        config = {"configurable": {"thread_id": session_id}}
+        graph_state = AGENT_GRAPH.invoke(initial_state, config=config)
+    return graph_state.get("result", {"errors": ["Agent 실행 결과가 비어 있습니다."]}), graph_state.get("status", 500)
 
 
 @app.get("/")
