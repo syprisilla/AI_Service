@@ -2,6 +2,20 @@
 
 청주 여행 스타일을 입력하면 관광 API와 카카오 Local API에서 수집한 장소 데이터를 로컬 JSON DB로 저장하고, 그 DB를 기반으로 밥집/카페/놀거리 슬롯형 추천 동선을 생성하는 Flask 앱입니다.
 
+## 코드 구조
+
+모델별 파일을 복붙하지 않도록 공통 기능을 `trip_agent` 패키지로 분리했습니다.
+
+```text
+app_gemini.py              # Gemini 실행 진입점, 5001 포트
+app.py                     # OpenAI 실행 진입점, 5000 포트
+trip_agent/web.py          # Flask 라우트와 app factory
+trip_agent/core.py         # LangGraph, Memory, RAG, 추천/동선/대중교통 공통 로직
+trip_agent/providers.py    # Gemini/OpenAI 모델 호출부
+```
+
+기준 구현은 Gemini입니다. 나중에 모델만 바꾸려면 `MODEL_PROVIDER=gemini|openai` 또는 `trip_agent/providers.py`의 provider 구현만 보면 됩니다. Agent 그래프, RAG, 메모리, ODsay, OutputParser 로직은 `trip_agent/core.py`를 공통으로 사용합니다.
+
 ## 장소 데이터 수집
 
 기본 수집 경로는 충청북도 관광명소정보 API입니다. 밥집/카페/숙소 같은 세부 장소는 카카오 Local API 키가 있을 때 함께 수집됩니다.
