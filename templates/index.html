@@ -37,12 +37,24 @@
             </select>
           </label>
 
-          <label>
-            여행 스타일
-            <textarea name="style_text" rows="4">
-카페 가고 싶고 사진 찍기 좋은 곳, 밥도 먹고 싶어</textarea
-            >
-          </label>
+          <input type="hidden" name="style_text" id="styleText" />
+          <input type="hidden" name="weather" value="맑음" />
+
+          <fieldset class="keyword-field">
+            <legend>키워드</legend>
+            <div class="keyword-grid">
+              <label><input type="checkbox" name="keywords" value="맛집" />맛집</label>
+              <label><input type="checkbox" name="keywords" value="카페" />카페</label>
+              <label><input type="checkbox" name="keywords" value="사진" />사진</label>
+              <label><input type="checkbox" name="keywords" value="산책" />산책</label>
+              <label><input type="checkbox" name="keywords" value="노래방" />노래방</label>
+              <label><input type="checkbox" name="keywords" value="PC방" />PC방</label>
+              <label><input type="checkbox" name="keywords" value="보드게임" />보드게임</label>
+              <label><input type="checkbox" name="keywords" value="동물" />동물</label>
+              <label><input type="checkbox" name="keywords" value="실내" />실내</label>
+              <label><input type="checkbox" name="keywords" value="실외" />실외</label>
+            </div>
+          </fieldset>
 
           <div class="grid-two">
             <label>
@@ -53,15 +65,6 @@
               </select>
             </label>
 
-            <label>
-              날씨
-              <select name="weather">
-                <option>맑음</option>
-                <option>비</option>
-                <option>더움</option>
-                <option>추움</option>
-              </select>
-            </label>
           </div>
 
           <label>
@@ -78,7 +81,7 @@
           <h2>취향만 입력하면 장소와 동선을 자동으로 고릅니다.</h2>
           <p>
             장소명은 직접 입력하지 않아도 됩니다. Agent가 관광 API에서 수집한
-            로컬 JSON DB, 태그 분석, 날씨 필터, 거리 계산을 순서대로 실행합니다.
+            로컬 JSON DB, 태그 분석, 거리 계산을 순서대로 실행합니다.
           </p>
         </div>
 
@@ -158,6 +161,8 @@
       const result = document.querySelector("#result");
       const emptyState = document.querySelector("#emptyState");
       const sessionInput = document.querySelector("#sessionId");
+      const styleInput = document.querySelector("#styleText");
+      const keywordInputs = [...document.querySelectorAll('input[name="keywords"]')];
       const savedSessionId = localStorage.getItem("cheongjuTripSessionId");
       const sessionId =
         savedSessionId ||
@@ -165,9 +170,29 @@
       localStorage.setItem("cheongjuTripSessionId", sessionId);
       sessionInput.value = sessionId;
 
+      keywordInputs.forEach((input) => {
+        input.addEventListener("change", () => {
+          const checked = keywordInputs.filter((item) => item.checked);
+          if (checked.length > 5) {
+            input.checked = false;
+            alert("키워드는 최대 5개까지 선택할 수 있습니다.");
+          }
+        });
+      });
+
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         const payload = Object.fromEntries(new FormData(form).entries());
+        const keywords = keywordInputs
+          .filter((input) => input.checked)
+          .map((input) => input.value);
+        if (!keywords.length) {
+          alert("키워드를 하나 이상 선택해주세요.");
+          return;
+        }
+        styleInput.value = keywords.join(" ");
+        payload.keywords = keywords;
+        payload.style_text = styleInput.value;
 
         const response = await fetch("/api/recommend", {
           method: "POST",
@@ -188,7 +213,7 @@
         result.classList.remove("hidden");
 
         document.querySelector("#tagLine").textContent =
-          `${data.summary.weather} · ${data.summary.transport} · ${data.summary.tags.join(", ")}`;
+          `${data.summary.transport} · ${data.summary.tags.join(", ")}`;
         document.querySelector("#resultTitle").textContent = data.summary.title;
         document.querySelector("#totalDistance").textContent =
           `${data.summary.total_distance}km`;

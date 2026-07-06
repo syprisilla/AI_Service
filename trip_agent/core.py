@@ -457,13 +457,17 @@ STYLE_KEYWORDS = {
     "동물먹이": ["먹이", "먹여", "먹이주", "사료", "동물 먹"],
     "놀거리": ["놀거리", "노래방", "노래연습장", "노래연습실", "노래궁", "보드게임", "볼링", "방탈출", "오락", "게임"],
     "노래방": ["노래방", "노래연습장", "노래연습실", "노래궁", "코인노래"],
+    "PC방": ["PC방", "피시방", "pc방", "게임방"],
+    "보드게임": ["보드게임", "보드게임카페"],
     "산책": ["산책", "걷", "걷기", "느긋", "힐링"],
     "사진": ["사진", "포토", "인생샷", "야경", "감성"],
     "역사": ["역사", "박물관", "전시", "직지", "문화"],
     "실내": ["실내", "비", "전시", "박물관"],
+    "실외": ["실외", "야외", "밖", "공원"],
     "자연": ["자연", "공원", "호수", "산성", "벚꽃"],
     "쇼핑": ["쇼핑", "상권", "거리"],
 }
+SELECTABLE_KEYWORDS = {"맛집", "카페", "사진", "산책", "노래방", "PC방", "보드게임", "동물", "실내", "실외"}
 
 TRANSPORT_SPEED_KMH = {
     "도보 중심": 4,
@@ -658,6 +662,34 @@ LOCAL_FALLBACK_PLACES = [
         "cost": 10000,
         "indoor": True,
         "stay_minutes": 60,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 서원구 사창동",
+    },
+    {
+        "name": "충북대 인근 PC방",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6320,
+        "lng": 127.4561,
+        "tags": ["PC방", "피시방", "놀거리", "게임", "실내"],
+        "score": 4.32,
+        "cost": 8000,
+        "indoor": True,
+        "stay_minutes": 80,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 서원구 사창동",
+    },
+    {
+        "name": "사창동 게이밍 PC방",
+        "category": "놀거리",
+        "role": "activity",
+        "lat": 36.6313,
+        "lng": 127.4576,
+        "tags": ["PC방", "피시방", "놀거리", "게임", "실내"],
+        "score": 4.24,
+        "cost": 8000,
+        "indoor": True,
+        "stay_minutes": 80,
         "source": "로컬 보강 DB",
         "address": "충북 청주시 서원구 사창동",
     },
@@ -1109,13 +1141,15 @@ def infer_tags(category: str, name: str, address: str, description: str) -> list
     if category in {"박물관"} or any(word in haystack for word in ["박물관", "전시", "역사", "문화", "유적"]):
         tags.update(["역사", "실내"])
     if category in {"공원"} or any(word in haystack for word in ["공원", "호수", "산", "숲", "둘레길", "산책"]):
-        tags.update(["자연", "산책"])
+        tags.update(["자연", "산책", "실외"])
     if category in {"관광지", "동물체험"}:
-        tags.update(["산책", "자연"])
+        tags.update(["산책", "자연", "실외"])
     if category == "놀거리":
         tags.update(["실내"])
     if any(word in haystack for word in ["노래방", "노래연습장", "노래연습실", "노래궁", "코인노래"]):
         tags.update(["노래방", "실내"])
+    if any(word in haystack for word in ["PC방", "피시방", "게임방"]):
+        tags.update(["PC방", "피시방", "놀거리", "실내"])
     if any(word in haystack for word in ["보드게임", "영화관", "메가박스", "CGV", "롯데시네마"]):
         tags.update(["놀거리", "실내"])
     return sorted(tags)
@@ -1143,6 +1177,31 @@ def role_label(role: str) -> str:
         "walk": "산책/마무리",
         "lodging": "숙소",
     }.get(role, "장소")
+
+
+def activity_signature(place: dict[str, Any]) -> str | None:
+    haystack = f"{place.get('name', '')} {place.get('category', '')} {' '.join(place.get('tags', []))}"
+    checks = [
+        ("노래방", ["노래방", "노래연습장", "노래연습실", "코인노래"]),
+        ("PC방", ["PC방", "피시방", "게임방"]),
+        ("보드게임", ["보드게임"]),
+        ("영화관", ["영화관", "메가박스", "CGV", "롯데시네마"]),
+        ("볼링", ["볼링"]),
+        ("방탈출", ["방탈출"]),
+    ]
+    for signature, terms in checks:
+        if any(term in haystack for term in terms):
+            return signature
+    if place.get("category") == "놀거리":
+        return place.get("name")
+    return None
+
+
+def duplicates_activity_type(place: dict[str, Any], selected: list[dict[str, Any]]) -> bool:
+    signature = activity_signature(place)
+    if signature is None:
+        return False
+    return any(activity_signature(item) == signature for item in selected)
 
 
 def kakao_map_search_url(name: str, address: str = "") -> str:
@@ -1777,6 +1836,7 @@ class AgentState(TypedDict):
     start_point: dict[str, float]
     duration: str
     style_text: str
+    selected_keywords: list[str]
     transport: str
     budget: int
     weather: str
@@ -1871,6 +1931,30 @@ def remove_private_info(text: str) -> tuple[str, list[str]]:
     return sanitized, warnings
 
 
+def normalize_selected_keywords(raw_keywords: Any) -> list[str]:
+    if raw_keywords is None:
+        return []
+    if isinstance(raw_keywords, str):
+        values = re.split(r"[,/\s]+", raw_keywords.strip())
+    elif isinstance(raw_keywords, list):
+        values = [str(value).strip() for value in raw_keywords]
+    else:
+        values = [str(raw_keywords).strip()]
+
+    selected: list[str] = []
+    for value in values:
+        if value in SELECTABLE_KEYWORDS and value not in selected:
+            selected.append(value)
+        if len(selected) >= 5:
+            break
+
+    indoor_selected = "실내" in selected
+    outdoor_selected = "실외" in selected
+    if indoor_selected == outdoor_selected:
+        selected = [keyword for keyword in selected if keyword not in {"실내", "실외"}]
+    return selected
+
+
 def normalize_session_id(raw_session_id: Any) -> str:
     session_id = str(raw_session_id or "default").strip()
     session_id = re.sub(r"[^a-zA-Z0-9_.:-]", "-", session_id)
@@ -1923,7 +2007,7 @@ def remember_turn(session_id: str, payload: dict[str, Any], result: dict[str, An
         {
             "payload": {
                 key: payload.get(key)
-                for key in ["session_id", "start_name", "duration", "style_text", "transport", "budget", "weather"]
+                for key in ["session_id", "start_name", "duration", "style_text", "keywords", "transport", "budget", "weather"]
             },
             "summary": result.get("summary", {}),
         }
@@ -1935,7 +2019,11 @@ def validate_and_normalize(payload: dict[str, Any]) -> tuple[AgentState | None, 
     warnings: list[str] = []
     merged_payload, memory_context = merge_memory_payload(payload)
     session_id = normalize_session_id(merged_payload.get("session_id"))
-    style_text, privacy_warnings = remove_private_info(str(merged_payload.get("style_text", "")).strip())
+    selected_keywords = normalize_selected_keywords(merged_payload.get("keywords"))
+    raw_style_text = str(merged_payload.get("style_text", "")).strip()
+    if selected_keywords:
+        raw_style_text = " ".join(selected_keywords)
+    style_text, privacy_warnings = remove_private_info(raw_style_text)
     warnings.extend(privacy_warnings)
     if memory_context:
         warnings.append(f"Session Memory: {session_id}의 최근 {len(memory_context)}턴 대화 이력을 참고했습니다.")
@@ -1952,7 +2040,7 @@ def validate_and_normalize(payload: dict[str, Any]) -> tuple[AgentState | None, 
     weather = str(merged_payload.get("weather", "맑음")).strip()
 
     if not style_text:
-        return None, ["여행 스타일을 하나 이상 입력해주세요."]
+        return None, ["키워드를 하나 이상 선택해주세요."]
 
     try:
         budget = int(str(merged_payload.get("budget", "0")).replace(",", "").strip())
@@ -1976,6 +2064,7 @@ def validate_and_normalize(payload: dict[str, Any]) -> tuple[AgentState | None, 
         "start_point": START_POINTS[start_name],
         "duration": duration,
         "style_text": style_text,
+        "selected_keywords": selected_keywords,
         "transport": transport,
         "budget": budget,
         "weather": weather,
@@ -1992,6 +2081,10 @@ def style_analysis_tool(style_text: str) -> list[str]:
     for tag, keywords in STYLE_KEYWORDS.items():
         if tag in normalized or any(keyword in normalized for keyword in keywords):
             tags.append(tag)
+    indoor_selected = "실내" in tags
+    outdoor_selected = "실외" in tags
+    if indoor_selected == outdoor_selected:
+        tags = [tag for tag in tags if tag not in {"실내", "실외"}]
     return tags or ["카페", "맛집", "사진"]
 
 
@@ -2019,6 +2112,10 @@ def extract_json_payload(text: str) -> dict[str, Any] | None:
 
 
 def llm_intent_tool(state: AgentState) -> tuple[list[str], dict[str, Any], str]:
+    if state.get("selected_keywords"):
+        tags = state["selected_keywords"]
+        return tags, {"intent_summary": "선택형 키워드 기반 의도 해석", "must_have": tags, "avoid": []}, "선택형 키워드 의도 해석"
+
     fallback_tags = style_analysis_tool(state["style_text"])
     format_instructions = (
         INTENT_OUTPUT_PARSER.get_format_instructions()
@@ -2066,6 +2163,12 @@ def indoor_preference_score(place: dict[str, Any], tags: list[str]) -> float:
     if "실내" not in tags:
         return 0
     return 3.0 if place["indoor"] else -5.0
+
+
+def outdoor_preference_score(place: dict[str, Any], tags: list[str]) -> float:
+    if "실외" not in tags:
+        return 0
+    return 2.6 if not place["indoor"] else -3.8
 
 
 def start_proximity_score(distance_km: float, transport: str) -> float:
@@ -2116,6 +2219,16 @@ def category_preference_score(place: dict[str, Any], tags: list[str]) -> float:
         score += 4.0
     if "노래방" in tags:
         if "노래방" in place_tags:
+            score += 8.0
+        elif category == "놀거리":
+            score += 1.5
+    if "PC방" in tags:
+        if "PC방" in place_tags or "피시방" in place_tags:
+            score += 8.0
+        elif category == "놀거리":
+            score += 1.5
+    if "보드게임" in tags:
+        if "보드게임" in place_tags:
             score += 8.0
         elif category == "놀거리":
             score += 1.5
@@ -2170,6 +2283,8 @@ def preferred_categories(tags: list[str], weather: str) -> set[str]:
     if "놀거리" in tags:
         categories.update({"놀거리", "카페"})
     if "노래방" in tags:
+        categories.update({"놀거리"})
+    if "PC방" in tags or "보드게임" in tags:
         categories.update({"놀거리"})
     if {"맛집", "카페", "쇼핑"}.intersection(tags):
         categories.update({"맛집", "카페", "시장", "상권", "카페거리", "놀거리"})
@@ -2268,8 +2383,8 @@ def role_matches(place: dict[str, Any], role: str) -> bool:
     if role == "walk":
         return (
             place_role == "walk"
-            or place["category"] in {"공원", "관광지", "놀거리"}
-            or bool({"산책", "보드게임", "영화관", "노래방", "놀거리"}.intersection(place["tags"]))
+            or place["category"] in {"공원", "관광지"}
+            or "산책" in place["tags"]
         )
     if role == "activity":
         return place_role in {"activity", "walk"} or place["category"] in {"관광지", "박물관", "공원", "상권", "놀거리", "동물체험"} or "동물" in place["tags"]
@@ -2342,6 +2457,7 @@ def slot_candidate_score(
         + len(matched_tags) * 1.8
         + weather_filter_score(place, weather)
         + indoor_preference_score(place, tags)
+        + outdoor_preference_score(place, tags)
         + category_preference_score(place, tags)
         + start_proximity_score(place.get("start_distance_km", current_distance), transport)
         - route_candidate_cost(current, place, selected, transport) * 0.35
@@ -2370,6 +2486,7 @@ def select_place_for_slot(
         for place in places
         if place["name"] not in selected_names
         and role_matches(place, slot["role"])
+        and not duplicates_activity_type(place, selected)
         and (
             transport != "도보 중심"
             or haversine_km(current, place) <= WALK_ONLY_MAX_KM
@@ -2382,6 +2499,7 @@ def select_place_for_slot(
             for place in places
             if place["name"] not in selected_names
             and role_matches(place, "activity")
+            and not duplicates_activity_type(place, selected)
             and (
                 transport != "도보 중심"
                 or haversine_km(current, place) <= WALK_ONLY_MAX_KM
@@ -2469,6 +2587,7 @@ def recommendation_tool(
             + len(matched_tags) * 2
             + weather_filter_score(place, weather)
             + indoor_preference_score(place, tags)
+            + outdoor_preference_score(place, tags)
             + category_preference_score(place, tags)
             + start_proximity_score(start_distance, transport)
             - budget_penalty
@@ -2577,6 +2696,7 @@ def candidate_lookup_tool(
             + len(matched_tags) * 2
             + weather_filter_score(place, state["weather"])
             + indoor_preference_score(place, tags)
+            + outdoor_preference_score(place, tags)
             + category_preference_score(place, tags)
             + start_proximity_score(start_distance, state["transport"])
             - budget_penalty
@@ -2777,6 +2897,7 @@ def enforce_day_trip_constraints(
             original
             and original["name"] not in used_names
             and role_matches(original, slot["role"])
+            and not duplicates_activity_type(original, selected)
             and can_use_next_place(current, original, state["transport"], remaining_budget)
         ):
             chosen = with_slot_metadata(original, slot, state["tags"])
@@ -2786,6 +2907,7 @@ def enforce_day_trip_constraints(
                 for place in pool
                 if place["name"] not in used_names
                 and role_matches(place, slot["role"])
+                and not duplicates_activity_type(place, selected)
                 and can_use_next_place(current, place, state["transport"], remaining_budget)
             ]
             if slot_candidates:
@@ -2813,6 +2935,23 @@ def enforce_day_trip_constraints(
     return selected
 
 
+def append_missing_keyword_warnings(state: AgentState, route: list[dict[str, Any]]) -> None:
+    precise_keywords = {"동물", "노래방", "PC방", "보드게임"}
+    selected = set(state.get("selected_keywords") or state["tags"])
+    route_tags = set()
+    for place in route:
+        route_tags.update(place.get("tags", []))
+        signature = activity_signature(place)
+        if signature:
+            route_tags.add(signature)
+
+    missing = sorted(keyword for keyword in selected.intersection(precise_keywords) if keyword not in route_tags)
+    if missing:
+        state["warnings"].append(
+            f"충북대 기준 이동/예산 조건 안에서 {', '.join(missing)} 후보를 찾지 못해 다른 가까운 장소로 대체했습니다."
+        )
+
+
 def llm_route_planner_tool(
     state: AgentState,
     tags: list[str],
@@ -2831,8 +2970,9 @@ def llm_route_planner_tool(
     prompt = (
         "너는 청주 여행 동선을 직접 판단하는 AI Agent다. 아래 후보 목록만 사용해서 여행 일정을 선택해라. "
         "규칙 점수는 참고자료일 뿐이고, 최종 선택은 네가 사용자 의도, 품질점수, 실제 방문 가능성, "
-        "거리, 예산, 날씨, 카테고리 균형을 비교해서 결정한다. "
+        "거리, 예산, 카테고리 균형을 비교해서 결정한다. "
         "품질점수가 낮거나 지도/전화/주소 근거가 약한 곳, 사용 의도와 카테고리가 맞지 않는 곳은 고르지 마라. "
+        "선택 키워드에 맞는 후보가 이동/예산 조건 안에 없으면 억지로 먼 후보를 고르지 말고, rejected_notes에 없다고 적은 뒤 가까운 대체 장소를 골라라. "
         "반드시 JSON 객체만 출력해라.\n\n"
         "JSON 스키마: {\"selected\":[{\"candidate_id\":1,\"day\":1,\"slot_role\":\"meal\","
         "\"slot_label\":\"점심\",\"reason\":\"선택 이유\"}],\"decision_summary\":\"판단 요약\","
@@ -2843,7 +2983,7 @@ def llm_route_planner_tool(
         f"LLM 의도 해석: {json.dumps(intent, ensure_ascii=False)}\n"
         f"태그: {tags}\n"
         f"출발지: {state['start_name']}, 기간: {state['duration']}, 이동수단: {state['transport']}, "
-        f"날씨: {state['weather']}, 예산: {state['budget']}\n"
+        f"예산: {state['budget']}\n"
         f"필요 슬롯: {json.dumps(slots, ensure_ascii=False)}\n"
         f"RAG 검색 문서 Context: {json.dumps(retrieved_documents or [], ensure_ascii=False)}\n"
         f"후보 목록: {json.dumps(compact_candidates, ensure_ascii=False)}"
@@ -3184,7 +3324,6 @@ def output_parser(
             "LangGraph StateGraph: fallback_route",
             "규칙 기반 Fallback Tool",
             "로컬 JSON 장소 DB",
-            "날씨 대응 Tool",
             "LangGraph StateGraph: final_response",
             "거리 계산 Tool",
             "동선 최적화 Tool",
@@ -3227,6 +3366,7 @@ def build_llm_context(
             "start": state["start_name"],
             "duration": state["duration"],
             "style_text": state["style_text"],
+            "selected_keywords": state.get("selected_keywords", []),
             "tags": state["tags"],
             "transport": state["transport"],
             "budget": state["budget"],
@@ -3257,7 +3397,7 @@ def fast_final_comment(
         route_preview += " → ..."
     lodging_note = f" 마지막은 {accommodation['name']} 체크인까지 이어집니다." if accommodation else ""
     return (
-        f"{state['weather']} 날씨와 {state['transport']} 이동을 기준으로 {route_preview} 순서가 가장 무난합니다. "
+        f"{state['transport']} 이동과 선택 키워드를 기준으로 {route_preview} 순서가 가장 무난합니다. "
         f"예상 비용은 {total_cost:,}원, 이동은 약 {total_move_minutes}분/{total_distance}km입니다."
         f"{lodging_note}"
     )
@@ -3272,10 +3412,10 @@ def llm_response_tool(
     total_move_minutes: int,
     accommodation: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
-    if not env_flag("ENABLE_FINAL_LLM", default=False):
+    if not env_flag("ENABLE_FINAL_LLM", default=True):
         return (
             fast_final_comment(state, route, total_cost, total_distance, total_move_minutes, accommodation),
-            "빠른 로컬 응답",
+            "로컬 Agent 응답",
         )
 
     context = build_llm_context(
@@ -3290,7 +3430,7 @@ def llm_response_tool(
     prompt = (
         "너는 청주 여행 추천 Agent의 최종 응답 생성기다. "
         "아래 JSON Context만 근거로 사용해서 한국어로 3문장 이내의 짧은 추천 코멘트를 작성해라. "
-        "예산, 날씨, 동선 최적화 이유를 자연스럽게 포함해라.\n\n"
+        "예산과 동선 최적화 이유를 자연스럽게 포함해라.\n\n"
         f"{context}"
     )
     llm_text, mode = model_provider().final_comment(prompt, temperature=0.4, timeout=12)
@@ -3414,6 +3554,7 @@ def final_response_node(graph_state: AgentGraphState) -> AgentGraphState:
             "예산을 조금 늘리거나 여행 스타일을 넓게 입력해 주세요.",
         ]
         return {"errors": errors, "status": 422, "result": {"errors": errors}}
+    append_missing_keyword_warnings(state, recommended)
 
     accommodation = None
     legs = distance_tool(state["start_point"], recommended, state["transport"], state["duration"], accommodation)
