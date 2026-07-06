@@ -1910,6 +1910,45 @@ GRAPH_MEMORY = MemorySaver() if MemorySaver else None
 SESSION_STORE: dict[str, list[dict[str, Any]]] = {}
 PLACE_DB_CACHE: list[dict[str, Any]] | None = None
 
+RECENT_MEMORY_EXCLUSION_TURNS = 3
+
+
+def normalize_place_name_for_memory(name: str) -> str:
+    return re.sub(r"\s+", "", str(name).strip()).lower()
+
+
+def used_place_names_from_memory(memory_context: list[dict[str, Any]], recent_turns: int = RECENT_MEMORY_EXCLUSION_TURNS) -> set[str]:
+    used_names: set[str] = set()
+
+    for item in memory_context[-recent_turns:]:
+        summary = item.get("summary", {})
+        if isinstance(summary, dict):
+            route_text = str(summary.get("route_text", ""))
+            for name in route_text.split("→"):
+                cleaned = name.strip()
+                if cleaned:
+                    used_names.add(cleaned)
+
+        places = item.get("places", [])
+        if isinstance(places, list):
+            for place in places:
+                if isinstance(place, dict) and place.get("name"):
+                    used_names.add(str(place["name"]).strip())
+
+    return used_names
+
+
+def memory_name_keys(memory_context: list[dict[str, Any]], recent_turns: int = RECENT_MEMORY_EXCLUSION_TURNS) -> set[str]:
+    return {
+        normalize_place_name_for_memory(name)
+        for name in used_place_names_from_memory(memory_context, recent_turns)
+        if normalize_place_name_for_memory(name)
+    }
+
+
+def is_memory_excluded_place(place: dict[str, Any], excluded_name_keys: set[str]) -> bool:
+    return normalize_place_name_for_memory(str(place.get("name", ""))) in excluded_name_keys
+
 
 def model_provider():
     return get_model_provider()
@@ -2010,6 +2049,7 @@ def remember_turn(session_id: str, payload: dict[str, Any], result: dict[str, An
                 for key in ["session_id", "start_name", "duration", "style_text", "keywords", "transport", "budget", "weather"]
             },
             "summary": result.get("summary", {}),
+            "places": result.get("places", []),
         }
     )
     del history[:-6]
@@ -2117,6 +2157,13 @@ def llm_intent_tool(state: AgentState) -> tuple[list[str], dict[str, Any], str]:
         return tags, {"intent_summary": "선택형 키워드 기반 의도 해석", "must_have": tags, "avoid": []}, "선택형 키워드 의도 해석"
 
     fallback_tags = style_analysis_tool(state["style_text"])
+    if not env_flag("ENABLE_INTENT_LLM", default=False):
+        return (
+            fallback_tags,
+            {"intent_summary": "로컬 규칙 기반 태그 분석", "must_have": fallback_tags, "avoid": []},
+            "로컬 규칙 기반 의도 해석",
+        )
+
     format_instructions = (
         INTENT_OUTPUT_PARSER.get_format_instructions()
         if INTENT_OUTPUT_PARSER
@@ -2554,9 +2601,15 @@ def recommendation_tool(
     duration: str,
     start_point: dict[str, float],
     transport: str,
+    excluded_place_names: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     places = []
     slots = itinerary_slots(duration)
+    excluded_name_keys = {
+        normalize_place_name_for_memory(name)
+        for name in (excluded_place_names or set())
+        if normalize_place_name_for_memory(name)
+    }
 
     # 도보 중심이어도 당일치기 기본 슬롯 5개 유지
     MIN_DAY_TRIP_SLOTS = 5
@@ -2575,6 +2628,8 @@ def recommendation_tool(
     place_db = load_place_db()
 
     for place in place_db:
+        if is_memory_excluded_place(place, excluded_name_keys):
+            continue
         quality = float(place.get("quality_score") or place_quality_score(place))
         if quality < MIN_RECOMMENDATION_QUALITY:
             continue
@@ -2662,6 +2717,13 @@ def candidate_lookup_tool(
     max_candidates: int = 48,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     slots = itinerary_slots(state["duration"])
+    used_place_names = used_place_names_from_memory(state.get("memory_context", []))
+    used_place_names.discard(state["start_name"])
+    used_name_keys = {
+        normalize_place_name_for_memory(name)
+        for name in used_place_names
+        if normalize_place_name_for_memory(name)
+    }
 
     # 도보 중심이어도 당일치기 기본 슬롯 5개를 유지
     MIN_DAY_TRIP_SLOTS = 5
@@ -2681,6 +2743,8 @@ def candidate_lookup_tool(
     per_place_budget = max(1, state["budget"] / max(1, target_count))
 
     for place in place_db:
+        if is_memory_excluded_place(place, used_name_keys):
+            continue
         quality = float(place.get("quality_score") or place_quality_score(place))
         if quality < MIN_RECOMMENDATION_QUALITY:
             continue
@@ -2725,6 +2789,7 @@ def candidate_lookup_tool(
         reverse=True,
     )
     ranked = transport_filtered_places(ranked, target_count, state["transport"])
+    ranked = diversify_ranked_places(ranked)
 
     selected: list[dict[str, Any]] = []
     selected_names: set[str] = set()
@@ -2778,12 +2843,49 @@ def retrieve_place_documents(candidates: list[dict[str, Any]], max_documents: in
     return [document_to_context(document) for document in documents]
 
 
+def place_area_signature(place: dict[str, Any]) -> str:
+    address = str(place.get("address") or "")
+    name = str(place.get("name") or "")
+    text = f"{address} {name}"
+    for pattern in (r"([가-힣0-9]+동)", r"([가-힣0-9]+읍)", r"([가-힣0-9]+면)", r"([가-힣0-9]+길)"):
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+    if "충북대" in text:
+        return "충북대"
+    if "터미널" in text or "가경" in text:
+        return "가경/터미널"
+    if "성안길" in text:
+        return "성안길"
+    return "기타"
+
+
+def diversify_ranked_places(ranked: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    remaining = ranked[:]
+    diversified: list[dict[str, Any]] = []
+    used_buckets: set[tuple[str, str]] = set()
+
+    while remaining:
+        next_index = 0
+        for index, place in enumerate(remaining):
+            bucket = (str(place.get("role") or place.get("category")), place_area_signature(place))
+            if bucket not in used_buckets:
+                next_index = index
+                break
+        place = remaining.pop(next_index)
+        diversified.append(place)
+        used_buckets.add((str(place.get("role") or place.get("category")), place_area_signature(place)))
+
+    return diversified
+
+
 def compact_candidate_for_llm(index: int, place: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": index,
         "name": place["name"],
         "category": place["category"],
         "role": place.get("role"),
+        "area": place_area_signature(place),
         "cost": place["cost"],
         "indoor": place["indoor"],
         "tags": place["tags"],
@@ -2877,9 +2979,20 @@ def enforce_day_trip_constraints(
     candidates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     slots = itinerary_slots("당일치기")
+
+    excluded_place_names = used_place_names_from_memory(state.get("memory_context", []))
+    excluded_place_names.discard(state["start_name"])
+    excluded_name_keys = {
+        normalize_place_name_for_memory(name)
+        for name in excluded_place_names
+        if normalize_place_name_for_memory(name)
+    }
+
     pool_by_name: dict[str, dict[str, Any]] = {}
     for place in candidates + route:
         if place.get("category") == "숙소" or place.get("role") == "lodging":
+            continue
+        if is_memory_excluded_place(place, excluded_name_keys):
             continue
         pool_by_name[place["name"]] = place
     pool = list(pool_by_name.values())
@@ -2896,6 +3009,7 @@ def enforce_day_trip_constraints(
         if (
             original
             and original["name"] not in used_names
+            and not is_memory_excluded_place(original, excluded_name_keys)
             and role_matches(original, slot["role"])
             and not duplicates_activity_type(original, selected)
             and can_use_next_place(current, original, state["transport"], remaining_budget)
@@ -2962,6 +3076,9 @@ def llm_route_planner_tool(
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     if not candidates:
         return [], "후보 없음 Fallback", {}
+    
+    excluded_place_names = sorted(used_place_names_from_memory(state.get("memory_context", [])))
+    excluded_place_names = [name for name in excluded_place_names if name != state["start_name"]]
 
     compact_candidates = [
         compact_candidate_for_llm(index, place)
@@ -2969,8 +3086,12 @@ def llm_route_planner_tool(
     ]
     prompt = (
         "너는 청주 여행 동선을 직접 판단하는 AI Agent다. 아래 후보 목록만 사용해서 여행 일정을 선택해라. "
+        "이전 추천에 이미 나온 장소는 다시 고르지 마라. "
+        "이번 호출 한 번 안에서 밥집, 카페, 놀거리/관광지, 이동 순서를 모두 결정해라. "
         "규칙 점수는 참고자료일 뿐이고, 최종 선택은 네가 사용자 의도, 품질점수, 실제 방문 가능성, "
         "거리, 예산, 카테고리 균형을 비교해서 결정한다. "
+        "같은 동네와 같은 음식 종류가 반복되면 감점하고, 충북대 중문 한식/밥집으로만 몰리지 않게 "
+        "사창동, 개신동, 복대동, 성안길, 터미널, 동남지구 등 가능한 대안을 비교해라. "
         "품질점수가 낮거나 지도/전화/주소 근거가 약한 곳, 사용 의도와 카테고리가 맞지 않는 곳은 고르지 마라. "
         "선택 키워드에 맞는 후보가 이동/예산 조건 안에 없으면 억지로 먼 후보를 고르지 말고, rejected_notes에 없다고 적은 뒤 가까운 대체 장소를 골라라. "
         "반드시 JSON 객체만 출력해라.\n\n"
@@ -2980,6 +3101,7 @@ def llm_route_planner_tool(
         "selected 개수는 slots 개수를 넘기지 말고, 예산 안에 최대한 맞춰라.\n\n"
         f"사용자 요청: {state['style_text']}\n"
         f"대화 메모리: {json.dumps(state.get('memory_context', []), ensure_ascii=False)}\n"
+        f"이번 추천에서 제외해야 하는 이전 추천 장소: {json.dumps(excluded_place_names, ensure_ascii=False)}\n"
         f"LLM 의도 해석: {json.dumps(intent, ensure_ascii=False)}\n"
         f"태그: {tags}\n"
         f"출발지: {state['start_name']}, 기간: {state['duration']}, 이동수단: {state['transport']}, "
@@ -3412,7 +3534,7 @@ def llm_response_tool(
     total_move_minutes: int,
     accommodation: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
-    if not env_flag("ENABLE_FINAL_LLM", default=True):
+    if not env_flag("ENABLE_FINAL_LLM", default=False):
         return (
             fast_final_comment(state, route, total_cost, total_distance, total_move_minutes, accommodation),
             "로컬 Agent 응답",
@@ -3504,6 +3626,8 @@ def plan_route_node(graph_state: AgentGraphState) -> AgentGraphState:
 
 def fallback_route_node(graph_state: AgentGraphState) -> AgentGraphState:
     state = graph_state["state"]
+    excluded_place_names = used_place_names_from_memory(state.get("memory_context", []))
+    excluded_place_names.discard(state["start_name"])
     recommended = recommendation_tool(
         graph_state.get("tags", state["tags"]),
         state["budget"],
@@ -3511,6 +3635,7 @@ def fallback_route_node(graph_state: AgentGraphState) -> AgentGraphState:
         state["duration"],
         state["start_point"],
         state["transport"],
+        excluded_place_names,
     )
     return {
         "recommended": recommended,

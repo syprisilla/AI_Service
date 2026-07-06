@@ -102,10 +102,14 @@ OpenAI 대신 Gemini 모델로 같은 Agent 구조를 실행하려면 `app_gemin
 ```powershell
 GEMINI_API_KEY=발급받은_GEMINI_API_KEY
 GEMINI_MODEL=gemini-1.5-flash
+ENABLE_INTENT_LLM=false
+ENABLE_FINAL_LLM=false
 python app_gemini.py
 ```
 
 Gemini 앱은 `http://127.0.0.1:5001`에서 실행됩니다. OpenAI 버전 `app.py`는 `http://127.0.0.1:5000`을 사용합니다.
+
+기본 설정에서는 Gemini를 후보 전체 비교/동선 선택에만 1회 호출합니다. 의도 해석과 최종 코멘트는 로컬 규칙 기반으로 처리해 429 무료 한도 초과 가능성을 낮춥니다. 두 기능을 LLM으로 다시 돌리고 싶으면 `.env`에서 `ENABLE_INTENT_LLM=true`, `ENABLE_FINAL_LLM=true`로 바꾸면 됩니다.
 
 ## ODsay 대중교통 안내
 
