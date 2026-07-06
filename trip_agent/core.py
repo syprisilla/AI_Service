@@ -95,55 +95,80 @@ KAKAO_KEYWORD_SEARCHES = [
     # =========================
     # 공통: 청주 주요 상권/관광지
     # =========================
-    ("청주 성안길 맛집", "meal"),
-    ("청주 성안길 카페", "cafe"),
-    ("청주 성안길 디저트", "cafe"),
-    ("청주 성안길 노래방", "activity"),
-    ("청주 성안길 코인노래방", "activity"),
-    ("청주 성안길 보드게임카페", "activity"),
-    ("청주 성안길 놀거리", "activity"),
-
-    ("청주 운리단길 맛집", "meal"),
-    ("청주 운리단길 카페", "cafe"),
-    ("청주 운리단길 디저트", "cafe"),
-    ("청주 운리단길 놀거리", "activity"),
-
-    ("청주 수암골 맛집", "meal"),
-    ("청주 수암골 카페", "cafe"),
-    ("청주 수암골 디저트", "cafe"),
-    ("청주 수암골 사진", "activity"),
-
-    ("청주 육거리시장 맛집", "meal"),
-    ("청주 육거리시장 카페", "cafe"),
-    ("청주 육거리시장 먹거리", "meal"),
-
-    ("청주 브런치", "meal"),
-    ("청주 베이커리 카페", "cafe"),
-    ("청주 체험 놀거리", "activity"),
-    ("청주 실내 놀거리", "activity"),
-    ("청주 박물관", "activity"),
-    ("청주 전시", "activity"),
-    ("청주 공원", "activity"),
-
-    # =========================
+     # =========================
     # 출발지: 충북대 기준
     # =========================
+
+    # 음식점 - 기본
     ("청주 충북대 맛집", "meal"),
     ("청주 충북대 밥집", "meal"),
     ("청주 충북대 점심", "meal"),
     ("청주 충북대 저녁", "meal"),
-    ("청주 충북대 한식", "meal"),
-    ("청주 충북대 분식", "meal"),
-    ("청주 충북대 돈까스", "meal"),
-    ("청주 충북대 고기집", "meal"),
-    ("청주 충북대 치킨", "meal"),
-    ("청주 충북대 피자", "meal"),
-    ("청주 충북대 파스타", "meal"),
-    ("청주 충북대 초밥", "meal"),
-    ("청주 충북대 마라탕", "meal"),
-    ("청주 충북대 국밥", "meal"),
-    ("청주 충북대 브런치", "meal"),
+    ("청주 충북대 혼밥", "meal"),
+    ("청주 충북대 가성비 맛집", "meal"),
+    ("청주 충북대 학생 맛집", "meal"),
+    ("청주 충북대 중문 맛집", "meal"),
+    ("청주 충북대 정문 맛집", "meal"),
+    ("청주 충북대 후문 맛집", "meal"),
 
+    # 음식점 - 한식 / 국밥 / 찌개
+    ("청주 충북대 한식", "meal"),
+    ("청주 충북대 백반", "meal"),
+    ("청주 충북대 국밥", "meal"),
+    ("청주 충북대 순대국밥", "meal"),
+    ("청주 충북대 돼지국밥", "meal"),
+    ("청주 충북대 김치찌개", "meal"),
+    ("청주 충북대 된장찌개", "meal"),
+    ("청주 충북대 부대찌개", "meal"),
+    ("청주 충북대 제육", "meal"),
+    ("청주 충북대 덮밥", "meal"),
+
+    # 음식점 - 분식 / 간단식
+    ("청주 충북대 분식", "meal"),
+    ("청주 충북대 김밥", "meal"),
+    ("청주 충북대 떡볶이", "meal"),
+    ("청주 충북대 라면", "meal"),
+    ("청주 충북대 돈까스", "meal"),
+    ("청주 충북대 돈가스", "meal"),
+
+    # 음식점 - 일식 / 라멘 / 초밥
+    ("청주 충북대 라멘", "meal"),
+    ("청주 충북대 일본라멘", "meal"),
+    ("청주 충북대 일식", "meal"),
+    ("청주 충북대 초밥", "meal"),
+    ("청주 충북대 스시", "meal"),
+    ("청주 충북대 카츠", "meal"),
+    ("청주 충북대 규동", "meal"),
+
+    # 음식점 - 중식 / 마라탕
+    ("청주 충북대 중식", "meal"),
+    ("청주 충북대 짜장면", "meal"),
+    ("청주 충북대 짬뽕", "meal"),
+    ("청주 충북대 탕수육", "meal"),
+    ("청주 충북대 마라탕", "meal"),
+    ("청주 충북대 마라샹궈", "meal"),
+
+    # 음식점 - 양식 / 파스타 / 피자
+    ("청주 충북대 양식", "meal"),
+    ("청주 충북대 파스타", "meal"),
+    ("청주 충북대 피자", "meal"),
+    ("청주 충북대 리조또", "meal"),
+    ("청주 충북대 브런치", "meal"),
+    ("청주 충북대 햄버거", "meal"),
+    ("청주 충북대 버거", "meal"),
+
+    # 음식점 - 고기 / 치킨 / 술집 겸 식사
+    ("청주 충북대 고기집", "meal"),
+    ("청주 충북대 삼겹살", "meal"),
+    ("청주 충북대 갈비", "meal"),
+    ("청주 충북대 닭갈비", "meal"),
+    ("청주 충북대 곱창", "meal"),
+    ("청주 충북대 막창", "meal"),
+    ("청주 충북대 치킨", "meal"),
+    ("청주 충북대 족발", "meal"),
+    ("청주 충북대 보쌈", "meal"),
+
+    # 카페
     ("청주 충북대 카페", "cafe"),
     ("청주 충북대 디저트 카페", "cafe"),
     ("청주 충북대 베이커리", "cafe"),
@@ -152,6 +177,7 @@ KAKAO_KEYWORD_SEARCHES = [
     ("청주 충북대 공부 카페", "cafe"),
     ("청주 충북대 케이크", "cafe"),
 
+    # 놀거리
     ("청주 충북대 노래방", "activity"),
     ("청주 충북대 코인노래방", "activity"),
     ("청주 충북대 보드게임카페", "activity"),
@@ -164,9 +190,21 @@ KAKAO_KEYWORD_SEARCHES = [
     ("청주 충북대 산책", "activity"),
     ("청주 충북대 사진", "activity"),
 
-    # 충북대 주변 지명
+    # 충북대 주변 지명 - 사창동
     ("청주 사창동 맛집", "meal"),
     ("청주 사창동 밥집", "meal"),
+    ("청주 사창동 점심", "meal"),
+    ("청주 사창동 저녁", "meal"),
+    ("청주 사창동 한식", "meal"),
+    ("청주 사창동 분식", "meal"),
+    ("청주 사창동 국밥", "meal"),
+    ("청주 사창동 돈까스", "meal"),
+    ("청주 사창동 라멘", "meal"),
+    ("청주 사창동 초밥", "meal"),
+    ("청주 사창동 마라탕", "meal"),
+    ("청주 사창동 고기집", "meal"),
+    ("청주 사창동 치킨", "meal"),
+    ("청주 사창동 파스타", "meal"),
     ("청주 사창동 카페", "cafe"),
     ("청주 사창동 디저트", "cafe"),
     ("청주 사창동 노래방", "activity"),
@@ -174,14 +212,33 @@ KAKAO_KEYWORD_SEARCHES = [
     ("청주 사창동 보드게임카페", "activity"),
     ("청주 사창동 놀거리", "activity"),
 
+    # 충북대 주변 지명 - 개신동
     ("청주 개신동 맛집", "meal"),
     ("청주 개신동 밥집", "meal"),
+    ("청주 개신동 점심", "meal"),
+    ("청주 개신동 저녁", "meal"),
+    ("청주 개신동 한식", "meal"),
+    ("청주 개신동 분식", "meal"),
+    ("청주 개신동 국밥", "meal"),
+    ("청주 개신동 돈까스", "meal"),
+    ("청주 개신동 라멘", "meal"),
+    ("청주 개신동 초밥", "meal"),
+    ("청주 개신동 마라탕", "meal"),
+    ("청주 개신동 고기집", "meal"),
     ("청주 개신동 카페", "cafe"),
     ("청주 개신동 디저트", "cafe"),
     ("청주 개신동 노래방", "activity"),
     ("청주 개신동 놀거리", "activity"),
 
+    # 충북대 주변 지명 - 복대동
+    ("청주 복대동 충북대 맛집", "meal"),
     ("청주 복대동 맛집", "meal"),
+    ("청주 복대동 밥집", "meal"),
+    ("청주 복대동 점심", "meal"),
+    ("청주 복대동 저녁", "meal"),
+    ("청주 복대동 한식", "meal"),
+    ("청주 복대동 분식", "meal"),
+    ("청주 복대동 고기집", "meal"),
     ("청주 복대동 카페", "cafe"),
     ("청주 복대동 노래방", "activity"),
     ("청주 복대동 보드게임카페", "activity"),
@@ -411,8 +468,9 @@ STYLE_KEYWORDS = {
 TRANSPORT_SPEED_KMH = {
     "도보 중심": 4,
     "대중교통": 18,
-    "자동차": 35,
 }
+ALLOWED_TRANSPORTS = {"대중교통", "도보 중심"}
+ALLOWED_DURATIONS = {"당일치기"}
 
 WALK_ONLY_MAX_MINUTES = 15
 WALK_ONLY_MAX_KM = TRANSPORT_SPEED_KMH["도보 중심"] * WALK_ONLY_MAX_MINUTES / 60
@@ -456,12 +514,110 @@ LOCAL_FALLBACK_PLACES = [
         "lat": 36.6328,
         "lng": 127.4545,
         "tags": ["맛집", "식사", "로컬", "실내"],
-        "score": 4.55,
+        "score": 4.0,
         "cost": 12000,
         "indoor": True,
         "stay_minutes": 60,
         "source": "로컬 보강 DB",
         "address": "충북 청주시 흥덕구 내수동로 63",
+    },
+    {
+        "name": "충북대 중문 한식 밥집",
+        "category": "맛집",
+        "role": "meal",
+        "lat": 36.6322,
+        "lng": 127.4550,
+        "tags": ["맛집", "식사", "한식", "백반", "가성비", "실내"],
+        "score": 4.35,
+        "cost": 9000,
+        "indoor": True,
+        "stay_minutes": 55,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 서원구 사창동",
+    },
+    {
+        "name": "충북대 정문 분식집",
+        "category": "맛집",
+        "role": "meal",
+        "lat": 36.6315,
+        "lng": 127.4570,
+        "tags": ["맛집", "식사", "분식", "김밥", "떡볶이", "가성비", "실내"],
+        "score": 4.3,
+        "cost": 7000,
+        "indoor": True,
+        "stay_minutes": 45,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 서원구 사창동",
+    },
+    {
+        "name": "충북대 후문 돈까스",
+        "category": "맛집",
+        "role": "meal",
+        "lat": 36.6308,
+        "lng": 127.4528,
+        "tags": ["맛집", "식사", "돈까스", "돈가스", "가성비", "실내"],
+        "score": 4.28,
+        "cost": 9500,
+        "indoor": True,
+        "stay_minutes": 55,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 복대동",
+    },
+    {
+        "name": "충북대 사창동 국밥집",
+        "category": "맛집",
+        "role": "meal",
+        "lat": 36.6330,
+        "lng": 127.4567,
+        "tags": ["맛집", "식사", "국밥", "한식", "가성비", "실내"],
+        "score": 4.25,
+        "cost": 9000,
+        "indoor": True,
+        "stay_minutes": 55,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 서원구 사창동",
+    },
+    {
+        "name": "충북대 개신동 마라탕",
+        "category": "맛집",
+        "role": "meal",
+        "lat": 36.6297,
+        "lng": 127.4572,
+        "tags": ["맛집", "식사", "중식", "마라탕", "실내"],
+        "score": 4.2,
+        "cost": 11000,
+        "indoor": True,
+        "stay_minutes": 60,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 서원구 개신동",
+    },
+    {
+        "name": "충북대 중문 파스타",
+        "category": "맛집",
+        "role": "meal",
+        "lat": 36.6327,
+        "lng": 127.4558,
+        "tags": ["맛집", "식사", "양식", "파스타", "실내"],
+        "score": 4.18,
+        "cost": 13000,
+        "indoor": True,
+        "stay_minutes": 65,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 서원구 사창동",
+    },
+    {
+        "name": "충북대 복대동 치킨",
+        "category": "맛집",
+        "role": "meal",
+        "lat": 36.6302,
+        "lng": 127.4538,
+        "tags": ["맛집", "식사", "치킨", "실내"],
+        "score": 4.12,
+        "cost": 12000,
+        "indoor": True,
+        "stay_minutes": 70,
+        "source": "로컬 보강 DB",
+        "address": "충북 청주시 흥덕구 복대동",
     },
     {
         "name": "스타벅스 충북대점",
@@ -732,6 +888,15 @@ LOCAL_FALLBACK_PLACES = [
 ]
 
 LOW_PRIORITY_REPEATED_CAFE_NAMES = {"목욕탕 카페(카페목간)", "폴앤주비 카페"}
+OVERUSED_CHUNGBUK_PLACE_NAMES = {
+    "멘야마쯔리 충북대점",
+    "스타벅스 충북대점",
+    "히어로보드 게임카페 충북대점",
+    "메가박스 충북대",
+}
+BLOCKED_PLACE_NAMES = {
+    "청년문화창작소 느티",
+}
 LOW_CONFIDENCE_PLACE_NAMES = {"레인데이"}
 GENERIC_PLACE_NAMES = {
     "성안길",
@@ -1013,6 +1178,8 @@ def is_low_confidence_place(
     tags: list[str],
     phone: str,
 ) -> bool:
+    if name in BLOCKED_PLACE_NAMES:
+        return True
     if name in LOW_CONFIDENCE_PLACE_NAMES:
         return True
     if source != "카카오 Local API":
@@ -1281,6 +1448,8 @@ def sanitize_place_db(places: list[dict[str, Any]]) -> list[dict[str, Any]]:
     sanitized = []
     for place in places:
         name = str(place.get("name", "")).strip()
+        if name in BLOCKED_PLACE_NAMES:
+           continue
         address = str(place.get("address", "")).strip()
         lat = place.get("lat")
         lng = place.get("lng")
@@ -1297,15 +1466,16 @@ def sanitize_place_db(places: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         raw_category = place.get("kakao_category") if source == "카카오 Local API" else place.get("category", "")
         category = infer_category({"category": raw_category or ""}, name, address, search_query)
+        if original_role == "lodging" or category == "숙소":
+            continue
         if is_generic_area_place(name, address, category, source):
             continue
-        if original_role in {"meal", "cafe", "lodging"}:
+        if original_role in {"meal", "cafe"}:
             role = original_role
-            category = {"meal": "맛집", "cafe": "카페", "lodging": "숙소"}[role]
+            category = {"meal": "맛집", "cafe": "카페"}[role]
             tags = {
                 "meal": ["맛집", "식사", "로컬"],
                 "cafe": ["카페", "디저트", "사진"],
-                "lodging": ["실내", "숙소", "교통"],
             }[role]
         else:
             role = place_role_for_category(category)
@@ -1411,6 +1581,8 @@ def fetch_kakao_places() -> list[dict[str, Any]]:
     authorization = kakao_key if kakao_key.startswith("KakaoAK ") else f"KakaoAK {kakao_key}"
     headers = {"Authorization": authorization}
     for query, role in KAKAO_KEYWORD_SEARCHES:
+        if role == "lodging":
+            continue
         for page in range(1, 3):
             raw = http_get(
                 KAKAO_LOCAL_API_URL,
@@ -1734,16 +1906,12 @@ def merge_memory_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list[
     elif "추움" in style_text or "추운" in style_text:
         merged["weather"] = "추움"
 
-    if "자동차" in style_text or "차로" in style_text:
-        merged["transport"] = "자동차"
-    elif "도보" in style_text or "걸어서" in style_text:
+    if "도보" in style_text or "걸어서" in style_text:
         merged["transport"] = "도보 중심"
     elif "대중교통" in style_text or "버스" in style_text:
         merged["transport"] = "대중교통"
 
-    if "1박" in style_text or "하룻밤" in style_text:
-        merged["duration"] = "1박 2일"
-    elif "당일" in style_text:
+    if "당일" in style_text:
         merged["duration"] = "당일치기"
     merged["session_id"] = session_id
     return merged, history
@@ -1794,13 +1962,13 @@ def validate_and_normalize(payload: dict[str, Any]) -> tuple[AgentState | None, 
     if budget <= 0:
         return None, ["예산은 1원 이상으로 입력해주세요."]
 
-    if transport not in TRANSPORT_SPEED_KMH:
+    if transport not in ALLOWED_TRANSPORTS:
         transport = "대중교통"
-        warnings.append("이동수단 값이 올바르지 않아 대중교통 기준으로 계산했습니다.")
+        warnings.append("이동수단은 대중교통과 도보 중심만 지원해 대중교통 기준으로 계산했습니다.")
 
-    if duration not in ["당일치기", "1박 2일"]:
+    if duration not in ALLOWED_DURATIONS:
         duration = "당일치기"
-        warnings.append("여행 기간 값이 올바르지 않아 당일치기 기준으로 계산했습니다.")
+        warnings.append("여행 기간은 당일치기만 지원해 당일치기 기준으로 계산했습니다.")
 
     state: AgentState = {
         "session_id": session_id,
@@ -1912,15 +2080,6 @@ def start_proximity_score(distance_km: float, transport: str) -> float:
             return -2.0
         return max(-10.0, -distance_km * 0.55)
 
-    if transport == "자동차":
-        if distance_km <= 5:
-            return 0.8
-        if distance_km <= 20:
-            return 1.4
-        if distance_km <= 35:
-            return 0.6
-        return -1.0
-
     if distance_km <= 3:
         return 2.2
     if distance_km <= 7:
@@ -1975,6 +2134,10 @@ def repeated_cafe_penalty(place: dict[str, Any]) -> float:
     if "목욕탕" in place["name"] and place["category"] in {"카페", "카페거리"}:
         return 3.0
     return 0.0
+
+
+def overused_chungbuk_place_penalty(place: dict[str, Any]) -> float:
+    return 5.0 if place["name"] in OVERUSED_CHUNGBUK_PLACE_NAMES else 0.0
 
 
 def diversity_adjusted_selection(
@@ -2036,8 +2199,6 @@ def diversity_candidate_score(
             score -= 1.0
         if transport == "도보 중심" and distance > 4.0:
             score -= min(5.0, (distance - 4.0) * 0.9)
-        elif transport == "자동차" and distance > 8.0:
-            score += 0.6
 
     selected_categories = {item["category"] for item in selected}
     if selected and place["category"] not in selected_categories:
@@ -2089,17 +2250,6 @@ def transport_filtered_places(
 
 
 def itinerary_slots(duration: str) -> list[dict[str, Any]]:
-    if duration == "1박 2일":
-        return [
-            {"day": 1, "role": "meal", "label": "점심"},
-            {"day": 1, "role": "activity", "label": "놀거리"},
-            {"day": 1, "role": "activity", "label": "놀거리"},
-            {"day": 1, "role": "cafe", "label": "카페"},
-            {"day": 1, "role": "meal", "label": "저녁"},
-            {"day": 2, "role": "meal", "label": "아침/브런치"},
-            {"day": 2, "role": "activity", "label": "놀거리"},
-            {"day": 2, "role": "cafe", "label": "카페"},
-        ]
     return [
         {"day": 1, "role": "meal", "label": "밥집"},
         {"day": 1, "role": "activity", "label": "놀거리"},
@@ -2177,7 +2327,7 @@ def slot_candidate_score(
     matched_tags = sorted(set(tags).intersection(place["tags"]))
     current_distance = haversine_km(current, place)
     duplicate_category_count = sum(1 for item in selected if item["category"] == place["category"])
-    budget_penalty = 1.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
+    budget_penalty = 8.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
     place_role = place.get("role") or place_role_for_category(place["category"])
     if place_role == slot["role"]:
         role_bonus = 14.0
@@ -2198,6 +2348,7 @@ def slot_candidate_score(
         - duplicate_category_count * 1.2
         - budget_penalty
         - repeated_cafe_penalty(place)
+        - overused_chungbuk_place_penalty(place)
         - pet_care_penalty(place, tags)
     )
 
@@ -2310,7 +2461,7 @@ def recommendation_tool(
         if quality < MIN_RECOMMENDATION_QUALITY:
             continue
         matched_tags = sorted(set(tags).intersection(place["tags"]))
-        budget_penalty = 1.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
+        budget_penalty = 8.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
         start_distance = haversine_km(start_point, place)
         score = (
             place["score"]
@@ -2322,6 +2473,7 @@ def recommendation_tool(
             + start_proximity_score(start_distance, transport)
             - budget_penalty
             - repeated_cafe_penalty(place)
+            - overused_chungbuk_place_penalty(place)
             - pet_care_penalty(place, tags)
         )
         places.append(
@@ -2418,7 +2570,7 @@ def candidate_lookup_tool(
 
         matched_tags = sorted(set(tags).intersection(place["tags"]))
         start_distance = haversine_km(state["start_point"], place)
-        budget_penalty = 1.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
+        budget_penalty = 8.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
         score = (
             place["score"]
             + min(quality, 6.0) * 0.35
@@ -2429,6 +2581,7 @@ def candidate_lookup_tool(
             + start_proximity_score(start_distance, state["transport"])
             - budget_penalty
             - repeated_cafe_penalty(place)
+            - overused_chungbuk_place_penalty(place)
             - pet_care_penalty(place, tags)
         )
         places.append(
@@ -2560,6 +2713,106 @@ def hydrate_llm_route(
     return route
 
 
+def can_use_next_place(
+    current: dict[str, float],
+    place: dict[str, Any],
+    transport: str,
+    remaining_budget: int,
+) -> bool:
+    if place["cost"] > remaining_budget:
+        return False
+    if transport == "도보 중심" and haversine_km(current, place) > WALK_ONLY_MAX_KM:
+        return False
+    return True
+
+
+def constrained_candidate_score(
+    current: dict[str, float],
+    place: dict[str, Any],
+    remaining_budget: int,
+    transport: str,
+) -> float:
+    distance = haversine_km(current, place)
+    affordability_bonus = max(0.0, (remaining_budget - place["cost"]) / max(remaining_budget, 1)) * 3.0
+    score = float(place.get("agent_score", place.get("score", 0))) + affordability_bonus
+    score -= distance * (2.0 if transport == "도보 중심" else 0.35)
+    score -= place["cost"] / 10000
+    return score
+
+
+def with_slot_metadata(place: dict[str, Any], slot: dict[str, Any], tags: list[str]) -> dict[str, Any]:
+    return {
+        **place,
+        "matched_tags": sorted(set(tags).intersection(place["tags"])),
+        "slot_role": slot["role"],
+        "slot_label": slot["label"],
+        "day": slot["day"],
+        "agent_score": round(float(place.get("agent_score", place.get("score", 0))), 2),
+    }
+
+
+def enforce_day_trip_constraints(
+    state: AgentState,
+    route: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    slots = itinerary_slots("당일치기")
+    pool_by_name: dict[str, dict[str, Any]] = {}
+    for place in candidates + route:
+        if place.get("category") == "숙소" or place.get("role") == "lodging":
+            continue
+        pool_by_name[place["name"]] = place
+    pool = list(pool_by_name.values())
+
+    selected: list[dict[str, Any]] = []
+    used_names: set[str] = set()
+    current = state["start_point"]
+    remaining_budget = state["budget"]
+
+    for index, slot in enumerate(slots):
+        original = route[index] if index < len(route) else None
+        chosen: dict[str, Any] | None = None
+
+        if (
+            original
+            and original["name"] not in used_names
+            and role_matches(original, slot["role"])
+            and can_use_next_place(current, original, state["transport"], remaining_budget)
+        ):
+            chosen = with_slot_metadata(original, slot, state["tags"])
+        else:
+            slot_candidates = [
+                place
+                for place in pool
+                if place["name"] not in used_names
+                and role_matches(place, slot["role"])
+                and can_use_next_place(current, place, state["transport"], remaining_budget)
+            ]
+            if slot_candidates:
+                chosen = with_slot_metadata(
+                    max(
+                        slot_candidates,
+                        key=lambda place: constrained_candidate_score(
+                            current,
+                            place,
+                            remaining_budget,
+                            state["transport"],
+                        ),
+                    ),
+                    slot,
+                    state["tags"],
+                )
+
+        if chosen is None:
+            continue
+        selected.append(chosen)
+        used_names.add(chosen["name"])
+        remaining_budget -= chosen["cost"]
+        current = chosen
+
+    return selected
+
+
 def llm_route_planner_tool(
     state: AgentState,
     tags: list[str],
@@ -2672,8 +2925,6 @@ def route_candidate_cost(
     distance = haversine_km(current, place)
     if transport == "도보 중심":
         return distance + max(0, distance - 2.5) * 1.5
-    if transport == "자동차":
-        return distance - (0.25 if route and place["category"] not in {item["category"] for item in route} else 0)
     return distance + max(0, distance - 8.0) * 0.25
 
 
@@ -2749,10 +3000,6 @@ def distance_tool(
                     move_minutes = walk_minutes
                     transit_error = transit_error or "대중교통 경로 확인 필요"
 
-        elif transport == "자동차":
-            move_minutes = max(5, round(distance / speed * 60))
-            mode = "car"
-
         else:
             move_minutes = walk_minutes
             mode = "walk"
@@ -2780,29 +3027,7 @@ def accommodation_tool(
     route: list[dict[str, Any]],
     place_cost: int,
 ) -> dict[str, Any] | None:
-    if state["duration"] != "1박 2일":
-        return None
-
-    day1_places = [place for place in route if place.get("day", 1) == 1]
-    day1_last_place = day1_places[-1] if day1_places else (route[0] if route else state["start_point"])
-    remaining_budget = max(0, state["budget"] - place_cost)
-
-    candidates = []
-    for accommodation in ACCOMMODATION_DB:
-        distance = haversine_km(day1_last_place, accommodation)
-        budget_penalty = 3 if accommodation["cost"] > remaining_budget else 0
-        transport_bonus = 1.0 if state["transport"] in accommodation["tags"] or "교통" in accommodation["tags"] else 0
-        score = accommodation["score"] + transport_bonus - distance * 0.25 - budget_penalty
-        candidates.append(
-            {
-                **accommodation,
-                "distance_from_day1_km": round(distance, 2),
-                "agent_score": round(score, 2),
-                "matched_tags": sorted(set(state["tags"]).intersection(accommodation["tags"])),
-            }
-        )
-
-    return max(candidates, key=lambda item: item["agent_score"])
+    return None
 
 
 def build_schedule(
@@ -2814,13 +3039,9 @@ def build_schedule(
     start_hour = 10
     current_minutes = start_hour * 60
     schedule = []
-    previous_day = 1
 
     for index, place in enumerate(route):
         day = int(place.get("day", 1))
-        if duration == "1박 2일" and day != previous_day:
-            current_minutes = 10 * 60
-            previous_day = day
         current_minutes += legs[index]["move_minutes"]
         start = format_time(current_minutes)
         current_minutes += place["stay_minutes"]
@@ -2836,23 +3057,6 @@ def build_schedule(
                 "indoor": place["indoor"],
             }
         )
-
-        next_day = int(route[index + 1].get("day", day)) if index + 1 < len(route) else day
-        if duration == "1박 2일" and accommodation and day == 1 and next_day == 2:
-            schedule.append(
-                {
-                    "day": 1,
-                    "time": "18:00 - 다음날 10:00",
-                    "place": accommodation["name"],
-                    "category": "숙소",
-                    "reason": (
-                        f"Day 1 마지막 장소와 약 {accommodation['distance_from_day1_km']}km 거리이고, "
-                        f"남은 예산을 고려해 선택한 1박 숙소입니다."
-                    ),
-                    "cost": accommodation["cost"],
-                    "indoor": True,
-                }
-            )
 
     return schedule
 
@@ -2984,7 +3188,6 @@ def output_parser(
             "LangGraph StateGraph: final_response",
             "거리 계산 Tool",
             "동선 최적화 Tool",
-            "숙소 추천 Tool",
             "Context 생성",
             "LLM 응답 생성 Tool",
             "LangChain PydanticOutputParser: TripPlan",
@@ -3197,7 +3400,22 @@ def final_response_node(graph_state: AgentGraphState) -> AgentGraphState:
     else:
         state["warnings"].append(f"{graph_state.get('intent_mode', '규칙 기반 의도 해석')} / {planner_mode}")
 
-    accommodation = accommodation_tool(state, recommended, sum(place["cost"] for place in recommended))
+    constrained = enforce_day_trip_constraints(
+        state,
+        recommended,
+        graph_state.get("candidates", []),
+    )
+    if constrained != recommended:
+        state["warnings"].append("당일치기 제약에 맞춰 예산 초과 또는 도보 15분 초과 후보를 제외했습니다.")
+    recommended = constrained
+    if not recommended:
+        errors = [
+            "예산과 이동 조건 안에서 추천 가능한 장소를 찾지 못했습니다.",
+            "예산을 조금 늘리거나 여행 스타일을 넓게 입력해 주세요.",
+        ]
+        return {"errors": errors, "status": 422, "result": {"errors": errors}}
+
+    accommodation = None
     legs = distance_tool(state["start_point"], recommended, state["transport"], state["duration"], accommodation)
     result = output_parser(
         state,

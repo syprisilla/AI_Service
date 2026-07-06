@@ -34,7 +34,6 @@
             여행 기간
             <select name="duration">
               <option>당일치기</option>
-              <option>1박 2일</option>
             </select>
           </label>
 
@@ -50,7 +49,6 @@
               이동수단
               <select name="transport">
                 <option>대중교통</option>
-                <option>자동차</option>
                 <option>도보 중심</option>
               </select>
             </label>
@@ -135,11 +133,6 @@
             <p id="routeText" class="route-text"></p>
           </section>
 
-          <section id="accommodationSection" class="hidden">
-            <h3>숙소 추천</h3>
-            <article id="accommodation" class="lodging-card"></article>
-          </section>
-
           <section>
             <h3>일정표</h3>
             <div id="schedule" class="timeline"></div>
@@ -218,26 +211,6 @@
         document.querySelector("#plannerInfo").textContent =
           data.summary.planner_mode;
 
-        const accommodationSection = document.querySelector(
-          "#accommodationSection",
-        );
-        const accommodation = document.querySelector("#accommodation");
-        if (data.accommodation) {
-          accommodationSection.classList.remove("hidden");
-          accommodation.innerHTML = `
-            <div>
-              <h4>${data.accommodation.name}</h4>
-              <p>${data.accommodation.category} · ${data.accommodation.cost.toLocaleString()}원 · Day 1 마지막 장소에서 약 ${data.accommodation.distance_from_day1_km}km</p>
-            </div>
-            <div class="chips">
-              ${data.accommodation.tags.map((tag) => `<span>${tag}</span>`).join("")}
-            </div>
-          `;
-        } else {
-          accommodationSection.classList.add("hidden");
-          accommodation.innerHTML = "";
-        }
-
         document.querySelector("#schedule").innerHTML = data.schedule
           .map((item, index) => {
             const leg = data.legs[index];
@@ -252,9 +225,7 @@
             const moveInfo = leg
               ? leg.mode === "transit"
                 ? `<p class="move-info">🚌 ${leg.from} → ${leg.to} : 약 ${leg.move_minutes}분 (${leg.distance_km}km)</p>${transitOptions}`
-                : leg.mode === "car"
-                  ? `<p class="move-info">🚗 ${leg.from} → ${leg.to} : 약 ${leg.move_minutes}분 (${leg.distance_km}km)</p>`
-                  : `<p class="move-info">🚶 ${leg.from} → ${leg.to} : 약 ${leg.move_minutes}분 (${leg.distance_km}km)</p>${leg.transit_error ? `<p class="move-info">${leg.transit_error}</p>` : ""}`
+                : `<p class="move-info">🚶 ${leg.from} → ${leg.to} : 약 ${leg.move_minutes}분 (${leg.distance_km}km)</p>${leg.transit_error ? `<p class="move-info">${leg.transit_error}</p>` : ""}`
               : "";
 
             return `
