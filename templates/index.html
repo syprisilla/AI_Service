@@ -52,16 +52,76 @@
           <fieldset class="keyword-field">
             <legend>보조 키워드</legend>
             <div class="keyword-grid">
-              <label><input type="checkbox" name="keywords" value="맛집" />맛집</label>
-              <label><input type="checkbox" name="keywords" value="카페" />카페</label>
-              <label><input type="checkbox" name="keywords" value="사진" />사진</label>
-              <label><input type="checkbox" name="keywords" value="산책" />산책</label>
-              <label><input type="checkbox" name="keywords" value="노래방" />노래방</label>
-              <label><input type="checkbox" name="keywords" value="PC방" />PC방</label>
-              <label><input type="checkbox" name="keywords" value="보드게임" />보드게임</label>
-              <label><input type="checkbox" name="keywords" value="동물" />동물</label>
-              <label><input type="checkbox" name="keywords" value="실내" />실내</label>
-              <label><input type="checkbox" name="keywords" value="실외" />실외</label>
+              <label
+                ><input
+                  type="checkbox"
+                  name="keywords"
+                  value="맛집"
+                />맛집</label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="keywords"
+                  value="카페"
+                />카페</label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="keywords"
+                  value="사진"
+                />사진</label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="keywords"
+                  value="산책"
+                />산책</label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="keywords"
+                  value="노래방"
+                />노래방</label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="keywords"
+                  value="PC방"
+                />PC방</label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="keywords"
+                  value="보드게임"
+                />보드게임</label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="keywords"
+                  value="동물"
+                />동물</label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="keywords"
+                  value="실내"
+                />실내</label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="keywords"
+                  value="실외"
+                />실외</label
+              >
             </div>
           </fieldset>
 
@@ -73,7 +133,6 @@
                 <option>도보 중심</option>
               </select>
             </label>
-
           </div>
 
           <label>
@@ -90,7 +149,8 @@
           <h2>자연어로 요청하면 Agent가 도구를 골라 동선을 만듭니다.</h2>
           <p>
             장소명은 직접 입력하지 않아도 됩니다. Agent가 관광 API에서 수집한
-            로컬 JSON DB, 외부 리뷰 검색, 거리 계산을 필요한 순서대로 실행합니다.
+            로컬 JSON DB, 외부 리뷰 검색, 거리 계산을 필요한 순서대로
+            실행합니다.
           </p>
         </div>
 
@@ -171,7 +231,9 @@
       const emptyState = document.querySelector("#emptyState");
       const sessionInput = document.querySelector("#sessionId");
       const styleInput = document.querySelector("#styleText");
-      const keywordInputs = [...document.querySelectorAll('input[name="keywords"]')];
+      const keywordInputs = [
+        ...document.querySelectorAll('input[name="keywords"]'),
+      ];
       const savedSessionId = localStorage.getItem("cheongjuTripSessionId");
       const sessionId =
         savedSessionId ||
@@ -262,7 +324,9 @@
                 : "";
             const moveInfo = leg
               ? leg.mode === "transit"
-                ? `<p class="move-info">🚌 ${leg.from} → ${leg.to} : 약 ${leg.move_minutes}분 (${leg.distance_km}km)</p>${transitOptions}`
+                ? `<p class="move-info">🚌 ${leg.from} → ${leg.to} : 약 ${leg.move_minutes}분 (${leg.distance_km}km)</p>
+       ${transitOptions}
+       ${leg.transit_error ? `<p class="move-info">⚠️ ${leg.transit_error}</p>` : ""}`
                 : `<p class="move-info">🚶 ${leg.from} → ${leg.to} : 약 ${leg.move_minutes}분 (${leg.distance_km}km)</p>${leg.transit_error ? `<p class="move-info">${leg.transit_error}</p>` : ""}`
               : "";
 

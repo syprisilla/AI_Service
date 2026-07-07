@@ -3125,14 +3125,190 @@ def transport_filtered_places(
     return ranked_places
 
 
-def itinerary_slots(duration: str) -> list[dict[str, Any]]:
-    return [
-        {"day": 1, "role": "meal", "label": "밥집"},
-        {"day": 1, "role": "activity", "label": "놀거리"},
-        {"day": 1, "role": "cafe", "label": "카페"},
-        {"day": 1, "role": "activity", "label": "놀거리"},
-        {"day": 1, "role": "walk", "label": "산책/마무리"},
-    ]
+def itinerary_slots(duration: str, tags: list[str] | None = None) -> list[dict[str, Any]]:
+    tags = tags or []
+    tag_set = set(tags)
+
+    slots: list[dict[str, Any]] = []
+
+    def add_slot(role: str, label: str) -> None:
+        """같은 label이 중복으로 너무 많이 들어가지 않게 추가"""
+        exists = any(slot["role"] == role and slot["label"] == label for slot in slots)
+        if not exists:
+            slots.append({"day": 1, "role": role, "label": label})
+
+    # =========================
+    # 1. 음식 / 카페 계열
+    # =========================
+    if "맛집" in tag_set or "식사" in tag_set or "밥집" in tag_set:
+        add_slot("meal", "밥집")
+
+    if "카페" in tag_set or "디저트" in tag_set or "커피" in tag_set or "베이커리" in tag_set:
+        add_slot("cafe", "카페")
+
+    if "브런치" in tag_set:
+        add_slot("cafe", "브런치 카페")
+
+    if "가성비" in tag_set:
+        add_slot("meal", "가성비 밥집")
+        add_slot("cafe", "가성비 카페")
+
+    if "혼밥" in tag_set:
+        add_slot("meal", "혼밥")
+
+    if "술집" in tag_set:
+        add_slot("meal", "식사 가능한 술집")
+
+    # =========================
+    # 2. 특정 놀거리 계열
+    # =========================
+    if "동물" in tag_set or "동물먹이" in tag_set or "동물체험" in tag_set:
+        add_slot("activity", "동물체험")
+
+    if "노래방" in tag_set:
+        add_slot("activity", "노래방")
+
+    if "PC방" in tag_set or "피시방" in tag_set:
+        add_slot("activity", "PC방")
+
+    if "보드게임" in tag_set:
+        add_slot("activity", "보드게임")
+
+    if "볼링" in tag_set:
+        add_slot("activity", "볼링")
+
+    if "방탈출" in tag_set:
+        add_slot("activity", "방탈출")
+
+    if "영화" in tag_set or "영화관" in tag_set:
+        add_slot("activity", "영화관")
+
+    if "전시" in tag_set or "박물관" in tag_set or "미술관" in tag_set:
+        add_slot("activity", "전시/박물관")
+
+    if "놀거리" in tag_set:
+        add_slot("activity", "놀거리")
+
+    # =========================
+    # 3. 산책 / 자연 / 사진 / 관광 계열
+    # =========================
+    if "산책" in tag_set or "자연" in tag_set or "공원" in tag_set or "힐링" in tag_set:
+        add_slot("walk", "산책/자연")
+
+    if "사진" in tag_set or "포토" in tag_set or "인생샷" in tag_set or "야경" in tag_set:
+        add_slot("activity", "사진 명소")
+
+    if "역사" in tag_set or "문화" in tag_set or "관광" in tag_set or "관광지" in tag_set:
+        add_slot("activity", "역사/문화")
+
+    if "쇼핑" in tag_set or "상권" in tag_set or "시장" in tag_set:
+        add_slot("activity", "쇼핑/상권")
+
+    # =========================
+    # 4. 상황/동행자 기반 태그
+    # =========================
+
+    # 데이트: 밥 + 카페 + 사진/산책/놀거리 조합
+    if "데이트" in tag_set or "커플" in tag_set:
+        add_slot("meal", "데이트 밥집")
+        add_slot("cafe", "감성 카페")
+        add_slot("activity", "데이트 코스")
+        add_slot("walk", "산책/사진")
+
+    # 부모님/가족: 너무 활동적인 것보다 식사 + 카페 + 산책/관광
+    if "부모님" in tag_set or "가족" in tag_set or "어른" in tag_set:
+        add_slot("meal", "가족 식사")
+        add_slot("cafe", "편한 카페")
+        add_slot("walk", "가벼운 산책")
+        add_slot("activity", "관광/문화")
+
+    # 아이/어린이: 동물, 공원, 체험 위주
+    if "아이" in tag_set or "어린이" in tag_set or "유아" in tag_set:
+        add_slot("meal", "아이와 식사")
+        add_slot("activity", "아이 체험")
+        add_slot("walk", "공원/산책")
+        add_slot("cafe", "가족 카페")
+
+    # 친구: 밥 + 놀거리 + 카페
+    if "친구" in tag_set or "모임" in tag_set:
+        add_slot("meal", "친구와 밥집")
+        add_slot("activity", "친구와 놀거리")
+        add_slot("cafe", "카페")
+
+    # 혼자: 혼밥 + 카페 + 산책
+    if "혼자" in tag_set or "혼놀" in tag_set:
+        add_slot("meal", "혼밥")
+        add_slot("cafe", "혼자 가기 좋은 카페")
+        add_slot("walk", "가벼운 산책")
+
+    # =========================
+    # 5. 분위기/조건 기반 태그
+    # =========================
+
+    # 실내 요청이면 실외 산책 강제하지 않음
+    if "실내" in tag_set or "비" in tag_set or "우천" in tag_set or "더움" in tag_set or "추움" in tag_set:
+        add_slot("meal", "실내 밥집")
+        add_slot("cafe", "실내 카페")
+        add_slot("activity", "실내 놀거리")
+
+        # 실내 요청인데 산책/자연이 명시되지 않았다면 walk 제거
+        if not {"산책", "자연", "공원"}.intersection(tag_set):
+            slots = [slot for slot in slots if slot["role"] != "walk"]
+
+    # 실외 요청이면 공원/사진 쪽 추가
+    if "실외" in tag_set or "야외" in tag_set:
+        add_slot("walk", "야외 산책")
+        add_slot("activity", "야외 사진 명소")
+
+    # 조용한 요청
+    if "조용" in tag_set or "한적" in tag_set or "힐링" in tag_set:
+        add_slot("cafe", "조용한 카페")
+        add_slot("walk", "한적한 산책")
+
+    # 인기/핫플 요청
+    if "인기" in tag_set or "핫플" in tag_set or "유명" in tag_set or "요즘" in tag_set:
+        add_slot("meal", "인기 맛집")
+        add_slot("cafe", "인기 카페")
+
+    # 짧은 동선 요청
+    if "근처" in tag_set or "가까운" in tag_set or "짧은동선" in tag_set:
+        add_slot("meal", "가까운 밥집")
+        add_slot("cafe", "가까운 카페")
+
+    # =========================
+    # 6. 아무 태그도 못 잡았을 때 기본 일정
+    # =========================
+    if not slots:
+        return [
+            {"day": 1, "role": "meal", "label": "밥집"},
+            {"day": 1, "role": "cafe", "label": "카페"},
+            {"day": 1, "role": "activity", "label": "가벼운 놀거리"},
+        ]
+
+    # =========================
+    # 7. 일정이 너무 짧으면 자연스럽게 보완
+    # =========================
+    has_meal = any(slot["role"] == "meal" for slot in slots)
+    has_cafe = any(slot["role"] == "cafe" for slot in slots)
+    has_activity = any(slot["role"] == "activity" for slot in slots)
+    has_walk = any(slot["role"] == "walk" for slot in slots)
+
+    if len(slots) == 1:
+        if not has_meal:
+            slots.insert(0, {"day": 1, "role": "meal", "label": "밥집"})
+        if not has_cafe:
+            slots.append({"day": 1, "role": "cafe", "label": "카페"})
+
+    elif len(slots) == 2:
+        if not has_meal and "맛집" not in tag_set:
+            slots.insert(0, {"day": 1, "role": "meal", "label": "밥집"})
+        elif not has_cafe and "카페" not in tag_set:
+            slots.append({"day": 1, "role": "cafe", "label": "카페"})
+
+    # =========================
+    # 8. 너무 길면 최대 5개까지만 사용
+    # =========================
+    return slots[:5]
 
 
 def role_matches(place: dict[str, Any], role: str) -> bool:
@@ -3204,13 +3380,96 @@ def slot_candidate_score(
     current_distance = haversine_km(current, place)
     duplicate_category_count = sum(1 for item in selected if item["category"] == place["category"])
     budget_penalty = 8.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
+
     place_role = place.get("role") or place_role_for_category(place["category"])
+
+    # 기본 role 점수
     if place_role == slot["role"]:
         role_bonus = 14.0
     elif role_matches(place, slot["role"]):
         role_bonus = 2.0
     else:
         role_bonus = -5.0
+
+    # slot label에 맞는 세부 장소 보너스
+    slot_label = slot.get("label", "")
+    place_text = (
+        f"{place.get('name', '')} "
+        f"{place.get('category', '')} "
+        f"{' '.join(place.get('tags', []))} "
+        f"{place.get('address', '')} "
+        f"{place.get('kakao_category', '')}"
+    )
+
+    if any(word in slot_label for word in ["동물", "동물체험"]) and any(
+        word in place_text for word in ["동물", "동물원", "체험"]
+    ):
+        role_bonus += 10.0
+
+    if "노래방" in slot_label and any(
+        word in place_text for word in ["노래방", "노래연습", "코인노래"]
+    ):
+        role_bonus += 10.0
+
+    if "PC방" in slot_label and any(
+        word in place_text for word in ["PC방", "피시방", "게임방"]
+    ):
+        role_bonus += 10.0
+
+    if "보드게임" in slot_label and "보드게임" in place_text:
+        role_bonus += 10.0
+
+    if "볼링" in slot_label and "볼링" in place_text:
+        role_bonus += 10.0
+
+    if "방탈출" in slot_label and "방탈출" in place_text:
+        role_bonus += 10.0
+
+    if "영화관" in slot_label and any(
+        word in place_text for word in ["영화관", "CGV", "롯데시네마", "메가박스"]
+    ):
+        role_bonus += 10.0
+
+    if any(word in slot_label for word in ["전시", "박물관", "미술관", "역사", "문화"]) and any(
+        word in place_text for word in ["박물관", "미술관", "전시", "문화", "역사"]
+    ):
+        role_bonus += 8.0
+
+    if any(word in slot_label for word in ["쇼핑", "상권", "시장"]) and any(
+        word in place_text for word in ["시장", "상권", "거리", "쇼핑", "백화점", "몰"]
+    ):
+        role_bonus += 8.0
+
+    if any(word in slot_label for word in ["산책", "자연", "공원", "야외"]) and any(
+        word in place_text for word in ["공원", "산책", "자연", "호수", "수목원", "무심천"]
+    ):
+        role_bonus += 7.0
+
+    if any(word in slot_label for word in ["사진", "포토", "인생샷", "야경"]) and any(
+        word in place_text for word in ["사진", "포토", "야경", "전망", "공원", "거리", "카페"]
+    ):
+        role_bonus += 6.0
+
+    if any(word in slot_label for word in ["데이트", "감성"]) and any(
+        word in place_text for word in ["카페", "공원", "거리", "사진", "맛집", "디저트"]
+    ):
+        role_bonus += 5.0
+
+    if any(word in slot_label for word in ["부모님", "가족", "어른", "아이"]) and any(
+        word in place_text for word in ["공원", "박물관", "카페", "식당", "한식", "동물"]
+    ):
+        role_bonus += 5.0
+
+    if any(word in slot_label for word in ["조용", "한적", "힐링"]) and any(
+        word in place_text for word in ["공원", "카페", "산책", "자연"]
+    ):
+        role_bonus += 5.0
+
+    if any(word in slot_label for word in ["인기", "핫플", "유명"]) and place.get("source") == "카카오 Local API":
+        role_bonus += 4.0
+
+    if any(word in slot_label for word in ["가성비", "혼밥"]) and place.get("cost", 0) <= 10000:
+        role_bonus += 4.0
 
     return (
         place["score"]
@@ -3319,7 +3578,7 @@ def recommendation_tool(
     intent: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     places = []
-    slots = itinerary_slots(duration)
+    slots = itinerary_slots(duration, tags)
     excluded_name_keys = {
         normalize_place_name_for_memory(name)
         for name in (excluded_place_names or set())
@@ -3329,14 +3588,6 @@ def recommendation_tool(
     # 도보 중심이어도 당일치기 기본 슬롯 5개 유지
     MIN_DAY_TRIP_SLOTS = 5
 
-    if duration == "당일치기" and len(slots) < MIN_DAY_TRIP_SLOTS:
-        slots = [
-            {"day": 1, "role": "meal", "label": "밥집"},
-            {"day": 1, "role": "activity", "label": "놀거리"},
-            {"day": 1, "role": "cafe", "label": "카페"},
-            {"day": 1, "role": "activity", "label": "놀거리"},
-            {"day": 1, "role": "walk", "label": "산책/마무리"},
-        ]
 
     target_count = len(slots)
     per_place_budget = budget / target_count
@@ -3434,7 +3685,7 @@ def candidate_lookup_tool(
     intent: dict[str, Any] | None = None,
     max_candidates: int = 48,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    slots = itinerary_slots(state["duration"])
+    slots = itinerary_slots(state["duration"], tags)
     used_place_names = used_place_names_from_memory(state.get("memory_context", []))
     used_place_names.discard(state["start_name"])
     used_name_keys = {
@@ -3793,7 +4044,7 @@ def enforce_day_trip_constraints(
     candidates: list[dict[str, Any]],
     intent: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    slots = itinerary_slots("당일치기")
+    slots = itinerary_slots("당일치기", state.get("tags", []))
 
     excluded_place_names = used_place_names_from_memory(state.get("memory_context", []))
     excluded_place_names.discard(state["start_name"])
@@ -4072,6 +4323,18 @@ def distance_tool(
             else:
                 # 15분 넘으면 무조건 대중교통 시도
                 transit_options, transit_error = odsay_transit_options(current, place)
+
+                print(
+                    "[ODsay DEBUG]",
+                    current_name,
+                    "->",
+                    place["name"],
+                    "options:",
+                    len(transit_options),
+                    "error:",
+                    transit_error,
+                    )
+                
                 if transit_options:
                     mode = "transit"
                     move_minutes = max(5, int(transit_options[0]["total_time"]))
