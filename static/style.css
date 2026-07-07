@@ -166,12 +166,15 @@ button:hover {
 
 .empty-state {
   display: grid;
-  place-content: center;
+  place-items: center;
+  align-content: center;
   min-height: 620px;
   text-align: center;
 }
 
 .empty-state h2 {
+  max-width: 640px;
+  margin-bottom: 28px;
   font-size: 32px;
   line-height: 1.2;
 }
@@ -179,6 +182,7 @@ button:hover {
 .empty-state p {
   max-width: 560px;
   color: var(--muted);
+  line-height: 1.7;
 }
 
 .hidden {
@@ -432,4 +436,42 @@ h3 {
   .metric {
     text-align: left;
   }
+}
+
+.loading-state {
+  min-height: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 2rem;
+}
+
+.loading-state.hidden {
+  display: none;
+}
+
+.loading-state h3 {
+  margin-top: 1rem;
+}
+
+.spinner {
+  width: 48px;
+  height: 48px;
+  border: 5px solid #dbeee9;
+  border-top-color: #245c55;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  margin: 0 auto 1rem;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }

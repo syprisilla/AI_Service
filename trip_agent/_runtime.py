@@ -2451,6 +2451,9 @@ class TripPlan(BaseModel):
     legs: list[dict[str, Any]]
     warnings: list[str]
     agent_flow: list[str]
+    tool_decision: list[dict[str, Any]] = Field(default_factory=list)
+    rag_sources: list[dict[str, Any]] = Field(default_factory=list)
+    middleware_decision: list[dict[str, Any]] = Field(default_factory=list)
 
 
 INTENT_OUTPUT_PARSER = PydanticOutputParser(pydantic_object=TravelIntent) if PydanticOutputParser else None
@@ -4422,6 +4425,194 @@ def build_reason(place: dict[str, Any]) -> str:
         return f"{slot} 슬롯에 맞춰 선택했고, {matched} 선호와 맞는 {weather_note} 장소입니다."
     return f"{matched} 선호와 맞고, {weather_note} 일정으로 활용하기 좋습니다."
 
+def build_tool_decision(
+    state: AgentState,
+    intent: dict[str, Any] | None,
+    planner_mode: str,
+    tool_events: list[str] | None,
+    legs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    intent = intent or {}
+    tool_events = tool_events or []
+
+    tavily_used = any(
+        "Tavily" in event and "검색 후" in event
+        for event in tool_events
+    )
+
+    tavily_skipped = any(
+        "Tavily" in event and "생략" in event
+        for event in tool_events
+    )
+
+    transit_used = any(
+        leg.get("mode") == "transit" and leg.get("transit_options")
+        for leg in legs
+    )
+
+    transit_attempted = any(
+        leg.get("mode") == "transit"
+        for leg in legs
+    )
+
+    llm_route_used = "Fallback" not in planner_mode
+
+    return [
+        {
+            "tool": "입력 검증 Middleware",
+            "used": True,
+            "reason": "출발지, 예산, 이동수단, 여행 기간 입력값을 검증하기 위해 사용했습니다.",
+        },
+        {
+            "tool": "개인정보 제거 Middleware",
+            "used": True,
+            "reason": "사용자 입력에서 전화번호, 이메일 등 개인정보 형식을 제거하기 위해 사용했습니다.",
+        },
+        {
+            "tool": "Session Memory",
+            "used": bool(state.get("memory_context")),
+            "reason": (
+                "이전 대화 조건을 이어받아 멀티턴 요청을 처리했습니다."
+                if state.get("memory_context")
+                else "이전 대화 맥락이 없어 현재 입력만 기준으로 처리했습니다."
+            ),
+        },
+        {
+            "tool": "자연어 의도 분석 Tool",
+            "used": True,
+            "reason": "사용자의 여행 스타일 문장을 태그, 필수 조건, 회피 조건으로 변환하기 위해 사용했습니다.",
+        },
+        {
+            "tool": "RAG 후보 검색 Tool",
+            "used": True,
+            "reason": "로컬 장소 DB를 LangChain Document 형태로 변환하고 사용자 조건과 맞는 후보를 검색하기 위해 사용했습니다.",
+        },
+        {
+            "tool": "Tavily 리뷰 근거 검색 Tool",
+            "used": tavily_used,
+            "reason": (
+                "사용자가 리뷰, 평점, 인기, 최신성 근거를 요구하여 외부 검색 결과를 후보 점수에 반영했습니다."
+                if tavily_used
+                else "리뷰/평점/인기/최신성 조건이 없거나 API 키가 없어 외부 리뷰 검색을 생략했습니다."
+                if tavily_skipped or not intent.get("needs_external_review")
+                else "외부 리뷰 검색 조건은 감지되었지만 검색 결과를 반영하지 못했습니다."
+            ),
+        },
+        {
+            "tool": "LLM 동선 선택 Tool",
+            "used": llm_route_used,
+            "reason": (
+                "검색된 후보 장소와 RAG Context를 비교하여 최종 동선을 선택하기 위해 사용했습니다."
+                if llm_route_used
+                else "LLM 동선 선택이 실패했거나 결과가 비어 있어 사용하지 못했습니다."
+            ),
+        },
+        {
+            "tool": "규칙 기반 Fallback Tool",
+            "used": not llm_route_used,
+            "reason": (
+                "LLM 동선 선택 실패 또는 빈 결과를 보완하기 위해 규칙 기반 추천을 사용했습니다."
+                if not llm_route_used
+                else "LLM 동선 선택이 성공하여 Fallback은 사용하지 않았습니다."
+            ),
+        },
+        {
+            "tool": "거리/동선 계산 Tool",
+            "used": True,
+            "reason": "장소 간 거리, 이동 시간, 총 이동 거리를 계산하기 위해 사용했습니다.",
+        },
+        {
+            "tool": "ODSay 대중교통 Tool",
+            "used": transit_used,
+            "reason": (
+                "대중교통 이동 구간에서 실제 버스 경로 후보를 계산하기 위해 사용했습니다."
+                if transit_used
+                else "대중교통 경로를 시도했지만 경로가 없거나 API 오류로 상세 후보를 반영하지 못했습니다."
+                if transit_attempted
+                else "도보 가능 구간이거나 도보 중심 조건이라 대중교통 상세 검색을 생략했습니다."
+            ),
+        },
+        {
+            "tool": "OutputParser",
+            "used": True,
+            "reason": "최종 응답을 TripPlan Pydantic 구조로 검증하기 위해 사용했습니다.",
+        },
+    ]
+
+
+def build_rag_sources(route: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+
+    for place in route:
+        matched_tags = place.get("matched_tags", [])
+        tag_text = ", ".join(matched_tags)
+
+        if place.get("llm_reason"):
+            reason = str(place["llm_reason"])
+        elif tag_text:
+            reason = f"사용자 조건({tag_text})과 일치하여 추천 후보로 선택되었습니다."
+        else:
+            reason = "거리, 예산, 장소 품질 점수를 기준으로 추천 후보로 선택되었습니다."
+
+        sources.append(
+            {
+                "place_name": place.get("name"),
+                "source": place.get("source", "로컬 장소 DB"),
+                "category": place.get("category"),
+                "role": place.get("role"),
+                "matched_tags": matched_tags,
+                "quality_score": place.get("quality_score"),
+                "review_boost": place.get("review_boost", 0),
+                "review_evidence": place.get("review_evidence", []),
+                "reason": reason,
+            }
+        )
+
+    return sources
+
+def build_middleware_decision(state: AgentState) -> list[dict[str, Any]]:
+    warnings = state.get("warnings", [])
+    memory_context = state.get("memory_context", [])
+
+    privacy_used = any("개인정보 제거 Middleware" in warning for warning in warnings)
+    fallback_used = any("Fallback Middleware" in warning for warning in warnings)
+    memory_used = bool(memory_context)
+
+    return [
+        {
+            "name": "입력 검증 Middleware",
+            "used": True,
+            "reason": "사용자 입력의 출발지, 예산, 이동수단, 여행 기간, 자연어 요청을 검증했습니다.",
+        },
+        {
+            "name": "개인정보 제거 Middleware",
+            "used": privacy_used,
+            "reason": (
+                "사용자 입력에서 전화번호 또는 이메일 형식을 감지해 제거했습니다."
+                if privacy_used
+                else "전화번호나 이메일 형식이 없어 제거할 개인정보가 없었습니다."
+            ),
+        },
+        {
+            "name": "Session Memory 병합",
+            "used": memory_used,
+            "reason": (
+                f"이전 대화 {len(memory_context)}턴을 참고해 현재 요청과 병합했습니다."
+                if memory_used
+                else "이전 대화 맥락을 이어받는 요청이 아니어서 메모리 병합을 사용하지 않았습니다."
+            ),
+        },
+        {
+            "name": "Fallback Middleware",
+            "used": fallback_used,
+            "reason": (
+                "지원하지 않는 출발지, 이동수단, 여행 기간 입력을 기본값으로 대체했습니다."
+                if fallback_used
+                else "입력값이 정상 범위라 기본값 대체가 필요하지 않았습니다."
+            ),
+        },
+    ]
+
 
 def output_parser(
     state: AgentState,
@@ -4511,7 +4702,7 @@ def output_parser(
             }
             for place in route
         ],
-        "legs": legs,
+  "legs": legs,
         "warnings": state["warnings"],
         "agent_flow": [
             "LangGraph StateGraph: validate_input",
@@ -4542,6 +4733,15 @@ def output_parser(
             "LLM 응답 생성 Tool",
             "LangChain PydanticOutputParser: TripPlan",
         ],
+        "tool_decision": build_tool_decision(
+            state=state,
+            intent=intent,
+            planner_mode=planner_mode,
+            tool_events=tool_events,
+            legs=legs,
+        ),
+        "rag_sources": build_rag_sources(route),
+        "middleware_decision": build_middleware_decision(state),
     }
     try:
         parsed_result = TRIP_OUTPUT_PARSER.parse(json.dumps(raw_result, ensure_ascii=False)) if TRIP_OUTPUT_PARSER else TripPlan.model_validate(raw_result)

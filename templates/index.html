@@ -154,6 +154,12 @@
           </p>
         </div>
 
+        <div id="loadingState" class="loading-state hidden">
+          <div class="spinner"></div>
+          <h3>Agent가 일정을 생성하는 중입니다...</h3>
+          <p>장소 검색, RAG 후보 분석, 동선 계산을 진행하고 있어요.</p>
+        </div>
+
         <div id="result" class="result hidden">
           <div class="result-header">
             <div>
@@ -215,10 +221,15 @@
             <div id="places" class="place-grid"></div>
           </section>
 
-          <section>
-            <h3>Agent 내부 구조</h3>
+          <details class="debug-details">
+            <summary>추천 생성 과정 보기</summary>
             <div id="flow" class="flow"></div>
-          </section>
+          </details>
+
+          <details class="debug-details">
+            <summary>이번 요청에서 사용된 Middleware 보기</summary>
+            <div id="middlewareFlow" class="flow"></div>
+          </details>
 
           <div id="warnings" class="warnings"></div>
         </div>
@@ -229,6 +240,8 @@
       const form = document.querySelector("#tripForm");
       const result = document.querySelector("#result");
       const emptyState = document.querySelector("#emptyState");
+      const loadingState = document.querySelector("#loadingState");
+      const submitButton = form.querySelector('button[type="submit"]');
       const sessionInput = document.querySelector("#sessionId");
       const styleInput = document.querySelector("#styleText");
       const keywordInputs = [
@@ -269,22 +282,43 @@
         }
         payload.style_text = styleText;
 
-        const response = await fetch("/api/recommend", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+        submitButton.disabled = true;
+        submitButton.textContent = "생성 중...";
+        emptyState.classList.add("hidden");
+        result.classList.add("hidden");
+        loadingState.classList.remove("hidden");
 
-        const data = await response.json();
-        if (!response.ok) {
-          alert(data.errors.join("\n"));
-          return;
+        try {
+          const response = await fetch("/api/recommend", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            alert(
+              (data.errors || ["일정 생성 중 오류가 발생했습니다."]).join("\n"),
+            );
+            return;
+          }
+
+          renderResult(data);
+        } catch (error) {
+          alert(
+            "서버 연결에 실패했습니다. Flask 서버가 실행 중인지 확인해 주세요.",
+          );
+        } finally {
+          submitButton.disabled = false;
+          submitButton.textContent = "일정 생성";
+          loadingState.classList.add("hidden");
         }
-        renderResult(data);
       });
 
       function renderResult(data) {
         emptyState.classList.add("hidden");
+        loadingState.classList.add("hidden");
         result.classList.remove("hidden");
 
         document.querySelector("#tagLine").textContent =
@@ -373,7 +407,23 @@
           .map((step, index) => `<span>${index + 1}. ${step}</span>`)
           .join("");
 
-        document.querySelector("#warnings").innerHTML = data.warnings
+        const middlewareDecision = data.middleware_decision || [];
+        document.querySelector("#middlewareFlow").innerHTML =
+          middlewareDecision.length
+            ? middlewareDecision
+                .map(
+                  (item, index) => `
+        <span>
+          ${index + 1}. ${item.name}
+          - ${item.used ? "사용됨" : "사용 안 함"}
+          : ${item.reason}
+        </span>
+      `,
+                )
+                .join("")
+            : "<span>이번 요청에서 별도로 표시할 Middleware가 없습니다.</span>";
+
+        document.querySelector("#warnings").innerHTML = (data.warnings || [])
           .map((warning) => `<p>${warning}</p>`)
           .join("");
       }
