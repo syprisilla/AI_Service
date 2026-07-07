@@ -87,6 +87,8 @@ KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY") or os.getenv("KAKAO_API_KEY
 ODSAY_TRANSIT_API_URL = "https://api.odsay.com/v1/api/searchPubTransPathT"
 ODSAY_API_KEY = os.getenv("ODSAY_API_KEY") or os.getenv("ODSAY_KEY")
 ODSAY_CACHE_PATH = DATA_DIR / "odsay_transit_cache.json"
+TAVILY_SEARCH_API_URL = os.getenv("TAVILY_SEARCH_API_URL", "https://api.tavily.com/search")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY") or os.getenv("TAVILY_KEY")
 WALK_ONLY_MAX_MINUTES = 15
 DAY_TRIP_MAX_TRANSIT_LEGS = 2
 TRANSIT_OPTION_LIMIT = 4
@@ -1525,6 +1527,29 @@ def http_get(
         return response.read()
 
 
+def http_post_json(
+    url: str,
+    payload: dict[str, Any],
+    timeout: int = 10,
+    headers: dict[str, str] | None = None,
+) -> bytes:
+    request_headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "CheongjuTripAgent/1.0",
+    }
+    if headers:
+        request_headers.update(headers)
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=request_headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
 def parse_api_payload(raw: bytes) -> Any:
     text = raw.decode("utf-8-sig", errors="replace").strip()
     if not text:
@@ -2375,6 +2400,7 @@ class AgentGraphState(TypedDict, total=False):
     recommended: list[dict[str, Any]]
     planner_mode: str
     planner_decision: dict[str, Any]
+    tool_events: list[str]
     accommodation: dict[str, Any] | None
     legs: list[dict[str, Any]]
     result: dict[str, Any]
@@ -2385,6 +2411,13 @@ class TravelIntent(BaseModel):
     must_have: list[str] = Field(default_factory=list)
     avoid: list[str] = Field(default_factory=list)
     pace: Literal["느긋", "보통", "빡빡"] = "보통"
+    needs_external_review: bool = False
+    needs_short_route: bool = False
+    needs_quiet: bool = False
+    wants_family: bool = False
+    wants_popular: bool = False
+    prefer_tourism_over_food: bool = False
+    tool_plan: list[str] = Field(default_factory=list)
     intent_summary: str = "규칙 기반 태그 분석"
 
 
@@ -2577,8 +2610,6 @@ def validate_and_normalize(payload: dict[str, Any]) -> tuple[AgentState | None, 
     session_id = normalize_session_id(merged_payload.get("session_id"))
     selected_keywords = normalize_selected_keywords(merged_payload.get("keywords"))
     raw_style_text = str(merged_payload.get("style_text", "")).strip()
-    if selected_keywords:
-        raw_style_text = " ".join(selected_keywords)
     style_text, privacy_warnings = remove_private_info(raw_style_text)
     warnings.extend(privacy_warnings)
     if memory_context:
@@ -2596,7 +2627,7 @@ def validate_and_normalize(payload: dict[str, Any]) -> tuple[AgentState | None, 
     weather = str(merged_payload.get("weather", "맑음")).strip()
 
     if not style_text:
-        return None, ["키워드를 하나 이상 선택해주세요."]
+        return None, ["원하는 여행 스타일을 자연어로 입력해주세요."]
 
     try:
         budget = int(str(merged_payload.get("budget", "0")).replace(",", "").strip())
@@ -2644,6 +2675,128 @@ def style_analysis_tool(style_text: str) -> list[str]:
     return tags or ["카페", "맛집", "사진"]
 
 
+def merge_tags(primary: list[str], supplemental: list[str]) -> list[str]:
+    merged: list[str] = []
+    for tag in primary + supplemental:
+        if tag in STYLE_KEYWORDS and tag not in merged:
+            merged.append(tag)
+    indoor_selected = "실내" in merged
+    outdoor_selected = "실외" in merged
+    if indoor_selected == outdoor_selected:
+        merged = [tag for tag in merged if tag not in {"실내", "실외"}]
+    return merged or ["카페", "맛집", "사진"]
+
+
+def has_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
+
+def local_intent_analysis(style_text: str, selected_keywords: list[str] | None = None) -> tuple[list[str], dict[str, Any]]:
+    selected_keywords = selected_keywords or []
+    text = re.sub(r"\s+", " ", style_text).strip()
+    tags = merge_tags(style_analysis_tool(text), selected_keywords)
+
+    needs_external_review = has_any(
+        text,
+        ("리뷰", "후기", "평점", "별점", "방문자", "인기", "핫플", "요즘", "최근", "최신", "유명", "입소문"),
+    )
+    needs_short_route = has_any(
+        text,
+        ("이동 거리 짧", "동선 짧", "가까운", "근처", "멀지 않", "짧게", "이동 적", "이동시간 짧"),
+    )
+    needs_quiet = has_any(text, ("조용", "한적", "사람 많", "붐비", "혼잡", "북적"))
+    wants_family = has_any(text, ("가족", "아이", "부모님", "어른", "어린이", "유아"))
+    wants_popular = has_any(text, ("인기", "핫플", "요즘", "유명", "입소문", "많이 가"))
+    prefer_tourism_over_food = (
+        has_any(text, ("관광지 위주", "관광 중심", "볼거리 위주", "맛집보다 관광", "먹는 것보다 관광"))
+        or ("맛집보다" in text and has_any(text, ("관광", "볼거리", "사진")))
+    )
+    if needs_quiet:
+        tags = merge_tags(tags, ["산책", "자연", "카페"])
+    if wants_family:
+        tags = merge_tags(tags, ["산책", "자연", "카페", "사진"])
+
+    must_have: list[str] = []
+    avoid: list[str] = []
+    if selected_keywords:
+        must_have.extend(selected_keywords)
+    if needs_external_review:
+        must_have.append("외부 리뷰 근거")
+    if needs_short_route:
+        must_have.append("짧은 이동거리")
+    if wants_family:
+        must_have.append("가족 적합")
+    if wants_popular:
+        must_have.append("인기/최신성")
+    if needs_quiet:
+        must_have.append("조용한 장소")
+        avoid.extend(["혼잡", "사람 많은 곳"])
+    if prefer_tourism_over_food:
+        must_have.append("관광지 우선")
+        tags = merge_tags(["사진", "산책", "자연", "역사"], [tag for tag in tags if tag != "맛집"])
+
+    tool_plan = ["자연어 의도 분석 Tool", "RAG 후보 검색 Tool"]
+    if needs_external_review:
+        tool_plan.append("Tavily 리뷰 근거 검색 Tool")
+    tool_plan.append("거리/동선 계산 Tool")
+    tool_plan.append("최종 동선 추천")
+
+    intent = {
+        "tags": tags,
+        "must_have": list(dict.fromkeys(must_have)),
+        "avoid": list(dict.fromkeys(avoid)),
+        "pace": "느긋" if needs_quiet or needs_short_route else "보통",
+        "needs_external_review": needs_external_review,
+        "needs_short_route": needs_short_route,
+        "needs_quiet": needs_quiet,
+        "wants_family": wants_family,
+        "wants_popular": wants_popular,
+        "prefer_tourism_over_food": prefer_tourism_over_food,
+        "tool_plan": tool_plan,
+        "intent_summary": "자연어 요청을 로컬 규칙으로 분석하고 키워드는 보조 조건으로 병합했습니다.",
+    }
+    return tags, intent
+
+
+def merge_intent_with_local(
+    parsed: dict[str, Any],
+    local_intent: dict[str, Any],
+    selected_keywords: list[str],
+) -> dict[str, Any]:
+    merged = {**local_intent, **parsed}
+    merged["tags"] = merge_tags(
+        [str(tag).strip() for tag in parsed.get("tags", [])],
+        [str(tag).strip() for tag in local_intent.get("tags", [])] + selected_keywords,
+    )
+    merged["must_have"] = list(
+        dict.fromkeys(
+            [str(item).strip() for item in local_intent.get("must_have", []) + parsed.get("must_have", []) if str(item).strip()]
+        )
+    )
+    merged["avoid"] = list(
+        dict.fromkeys(
+            [str(item).strip() for item in local_intent.get("avoid", []) + parsed.get("avoid", []) if str(item).strip()]
+        )
+    )
+    for key in (
+        "needs_external_review",
+        "needs_short_route",
+        "needs_quiet",
+        "wants_family",
+        "wants_popular",
+        "prefer_tourism_over_food",
+    ):
+        merged[key] = bool(local_intent.get(key) or parsed.get(key))
+
+    tool_plan = ["자연어 의도 분석 Tool", "RAG 후보 검색 Tool"]
+    if merged["needs_external_review"]:
+        tool_plan.append("Tavily 리뷰 근거 검색 Tool")
+    tool_plan.append("거리/동선 계산 Tool")
+    tool_plan.append("최종 동선 추천")
+    merged["tool_plan"] = tool_plan
+    return merged
+
+
 def extract_json_payload(text: str) -> dict[str, Any] | None:
     stripped = text.strip()
     if not stripped:
@@ -2668,48 +2821,57 @@ def extract_json_payload(text: str) -> dict[str, Any] | None:
 
 
 def llm_intent_tool(state: AgentState) -> tuple[list[str], dict[str, Any], str]:
-    if state.get("selected_keywords"):
-        tags = state["selected_keywords"]
-        return tags, {"intent_summary": "선택형 키워드 기반 의도 해석", "must_have": tags, "avoid": []}, "선택형 키워드 의도 해석"
-
-    fallback_tags = style_analysis_tool(state["style_text"])
+    fallback_tags, local_intent = local_intent_analysis(
+        state["style_text"],
+        state.get("selected_keywords", []),
+    )
     if not env_flag("ENABLE_INTENT_LLM", default=False):
         return (
             fallback_tags,
-            {"intent_summary": "로컬 규칙 기반 태그 분석", "must_have": fallback_tags, "avoid": []},
-            "로컬 규칙 기반 의도 해석",
+            local_intent,
+            "로컬 자연어 의도 해석",
         )
 
     format_instructions = (
         INTENT_OUTPUT_PARSER.get_format_instructions()
         if INTENT_OUTPUT_PARSER
-        else "JSON 스키마: {\"tags\":[\"...\"],\"must_have\":[\"...\"],\"avoid\":[\"...\"],\"pace\":\"느긋|보통|빡빡\",\"intent_summary\":\"짧은 한국어 요약\"}."
+        else (
+            "JSON 스키마: {\"tags\":[\"...\"],\"must_have\":[\"...\"],\"avoid\":[\"...\"],"
+            "\"pace\":\"느긋|보통|빡빡\",\"needs_external_review\":true,"
+            "\"needs_short_route\":false,\"needs_quiet\":false,\"wants_family\":false,"
+            "\"wants_popular\":false,\"prefer_tourism_over_food\":false,"
+            "\"tool_plan\":[\"...\"],\"intent_summary\":\"짧은 한국어 요약\"}."
+        )
     )
     prompt = (
         "너는 청주 여행 Agent의 의도 해석기다. 사용자의 자연어 입력을 여행 선호 태그와 제약으로 해석해라. "
+        "키워드 체크박스는 보조 조건일 뿐이며 자연어 요청을 우선한다. "
+        "리뷰/후기/평점/인기/요즘/최신성 근거가 필요하면 needs_external_review를 true로 둔다. "
+        "이동거리 짧게/가까운 곳/동선 짧게 요청이면 needs_short_route를 true로 둔다. "
+        "사람 많은 곳 제외/조용한 장소 요청이면 needs_quiet를 true로 둔다. "
         "반드시 JSON 객체만 출력해라. tags는 아래 허용 태그 중 필요한 것만 골라라: "
         f"{list(STYLE_KEYWORDS.keys())}. "
         f"{format_instructions}\n\n"
         f"이전 대화 메모리: {json.dumps(state.get('memory_context', []), ensure_ascii=False)}\n"
         f"사용자 입력: {state['style_text']}\n"
+        f"보조 선택 키워드: {json.dumps(state.get('selected_keywords', []), ensure_ascii=False)}\n"
+        f"로컬 1차 의도 분석: {json.dumps(local_intent, ensure_ascii=False)}\n"
         f"기간: {state['duration']}, 이동수단: {state['transport']}, 날씨: {state['weather']}, 예산: {state['budget']}"
     )
     provider = model_provider()
     parsed, mode = provider.json_tool(prompt)
     if not parsed:
-        return fallback_tags, {"intent_summary": "규칙 기반 태그 분석", "must_have": [], "avoid": []}, f"의도 해석 Fallback: {mode}"
+        return fallback_tags, local_intent, f"의도 해석 Fallback: {mode}"
 
     try:
         intent_model = INTENT_OUTPUT_PARSER.parse(json.dumps(parsed, ensure_ascii=False)) if INTENT_OUTPUT_PARSER else TravelIntent.model_validate(parsed)
         parsed = intent_model.model_dump()
     except (ValidationError, ValueError) as error:
-        return fallback_tags, {"intent_summary": f"Pydantic OutputParser 검증 실패: {error}", "must_have": [], "avoid": []}, "의도 해석 OutputParser Fallback"
+        fallback_intent = {**local_intent, "intent_summary": f"Pydantic OutputParser 검증 실패: {error}"}
+        return fallback_tags, fallback_intent, "의도 해석 OutputParser Fallback"
 
-    allowed = set(STYLE_KEYWORDS)
-    tags = [str(tag).strip() for tag in parsed.get("tags", []) if str(tag).strip() in allowed]
-    if not tags:
-        tags = fallback_tags
-    return tags, parsed, f"{provider.name} LLM 의도 해석"
+    parsed = merge_intent_with_local(parsed, local_intent, state.get("selected_keywords", []))
+    return parsed["tags"], parsed, f"{provider.name} LLM 자연어 의도 해석"
 
 
 def weather_filter_score(place: dict[str, Any], weather: str) -> float:
@@ -2801,6 +2963,42 @@ def category_preference_score(place: dict[str, Any], tags: list[str]) -> float:
         score += 2.2
     if "자연" in tags and category in {"공원", "관광지"}:
         score += 2.2
+    return score
+
+
+def intent_adjustment_score(place: dict[str, Any], intent: dict[str, Any], distance_km: float = 0.0) -> float:
+    score = 0.0
+    category = str(place.get("category", ""))
+    role = str(place.get("role") or place_role_for_category(category))
+    tags = set(place.get("tags", []))
+    text = f"{place.get('name', '')} {category} {' '.join(tags)} {place.get('address', '')}"
+
+    if intent.get("wants_family"):
+        if category in {"공원", "관광지", "박물관", "카페", "동물체험"} or tags.intersection({"산책", "자연", "동물", "실내"}):
+            score += 2.4
+        if role in {"meal", "cafe"}:
+            score += 0.8
+
+    if intent.get("needs_quiet"):
+        if tags.intersection({"산책", "자연"}) or category in {"공원", "박물관", "관광지"}:
+            score += 2.0
+        if category in {"상권", "시장", "카페거리"} or any(word in text for word in ("번화가", "중심가", "핫플")):
+            score -= 2.0
+
+    if intent.get("prefer_tourism_over_food"):
+        if role in {"walk", "activity"} or category in {"관광지", "공원", "박물관", "동물체험"}:
+            score += 3.2
+        if role == "meal":
+            score -= 2.8
+
+    if intent.get("needs_short_route"):
+        if distance_km <= 2:
+            score += 3.0
+        elif distance_km <= 5:
+            score += 1.4
+        else:
+            score -= min(6.0, distance_km * 0.35)
+
     return score
 
 
@@ -3118,6 +3316,7 @@ def recommendation_tool(
     start_point: dict[str, float],
     transport: str,
     excluded_place_names: set[str] | None = None,
+    intent: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     places = []
     slots = itinerary_slots(duration)
@@ -3161,6 +3360,8 @@ def recommendation_tool(
             + outdoor_preference_score(place, tags)
             + category_preference_score(place, tags)
             + start_proximity_score(start_distance, transport)
+            + intent_adjustment_score(place, intent or {}, start_distance)
+            + float(place.get("review_boost", 0))
             - budget_penalty
             - repeated_cafe_penalty(place)
             - overused_chungbuk_place_penalty(place)
@@ -3230,6 +3431,7 @@ def recommendation_tool(
 def candidate_lookup_tool(
     state: AgentState,
     tags: list[str],
+    intent: dict[str, Any] | None = None,
     max_candidates: int = 48,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     slots = itinerary_slots(state["duration"])
@@ -3279,6 +3481,8 @@ def candidate_lookup_tool(
             + outdoor_preference_score(place, tags)
             + category_preference_score(place, tags)
             + start_proximity_score(start_distance, state["transport"])
+            + intent_adjustment_score(place, intent or {}, start_distance)
+            + float(place.get("review_boost", 0))
             - budget_penalty
             - repeated_cafe_penalty(place)
             - overused_chungbuk_place_penalty(place)
@@ -3359,6 +3563,96 @@ def retrieve_place_documents(candidates: list[dict[str, Any]], max_documents: in
     return [document_to_context(document) for document in documents]
 
 
+def tavily_search(query: str, max_results: int = 4) -> list[dict[str, Any]]:
+    api_key = TAVILY_API_KEY
+    if not api_key:
+        return []
+    payload = {
+        "api_key": api_key,
+        "query": query,
+        "search_depth": "basic",
+        "max_results": max_results,
+        "include_answer": False,
+        "include_raw_content": False,
+    }
+    headers = {"Authorization": f"Bearer {api_key}"}
+    raw = http_post_json(TAVILY_SEARCH_API_URL, payload, timeout=5, headers=headers)
+    data = json.loads(raw.decode("utf-8"))
+    results = data.get("results", []) if isinstance(data, dict) else []
+    return [result for result in results if isinstance(result, dict)]
+
+
+def review_evidence_score(results: list[dict[str, Any]]) -> tuple[float, list[str]]:
+    evidence_terms = ("리뷰", "후기", "평점", "별점", "방문", "인기", "추천", "맛집", "카페", "블로그")
+    positive_terms = ("좋", "많", "유명", "인기", "추천", "만족", "재방문", "핫플", "깔끔", "친절")
+    score = 0.0
+    snippets: list[str] = []
+    for result in results:
+        title = str(result.get("title", ""))
+        content = str(result.get("content", ""))
+        url = str(result.get("url", ""))
+        text = f"{title} {content}"
+        evidence_hits = sum(1 for term in evidence_terms if term in text)
+        positive_hits = sum(1 for term in positive_terms if term in text)
+        if evidence_hits:
+            score += 0.8 + min(1.2, evidence_hits * 0.25) + min(0.8, positive_hits * 0.2)
+            if title:
+                snippets.append(title[:80])
+            elif url:
+                snippets.append(url[:80])
+    return round(min(score, 5.0), 2), snippets[:3]
+
+
+def tavily_review_boost_tool(
+    state: AgentState,
+    intent: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    max_places: int | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if not intent.get("needs_external_review"):
+        return candidates, ["Tavily 리뷰 근거 검색 Tool: 자연어 의도상 외부 리뷰 근거가 필요하지 않아 생략"]
+    if not TAVILY_API_KEY:
+        state["warnings"].append("Tavily 리뷰 근거 검색 Tool: TAVILY_API_KEY가 없어 외부 검색 보정 없이 진행했습니다.")
+        return candidates, ["Tavily 리뷰 근거 검색 Tool: API 키 없음으로 생략"]
+
+    if max_places is None:
+        try:
+            max_places = max(1, min(12, int(os.getenv("TAVILY_MAX_PLACES", "6"))))
+        except ValueError:
+            max_places = 6
+
+    boosted: list[dict[str, Any]] = []
+    searched = 0
+    for place in candidates:
+        updated = dict(place)
+        if searched < max_places:
+            query = f"청주 {place['name']} 리뷰 후기 평점 인기"
+            try:
+                results = tavily_search(query)
+                review_boost, evidence = review_evidence_score(results)
+            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, OSError) as error:
+                state["warnings"].append(f"Tavily 리뷰 근거 검색 Tool 실패: {error}")
+                return candidates, ["Tavily 리뷰 근거 검색 Tool: 호출 실패로 기존 후보 점수 유지"]
+            updated["review_boost"] = review_boost
+            updated["review_evidence"] = evidence
+            updated["agent_score"] = round(float(updated.get("agent_score", 0)) + review_boost, 2)
+            searched += 1
+        else:
+            updated.setdefault("review_boost", 0.0)
+            updated.setdefault("review_evidence", [])
+        boosted.append(updated)
+
+    boosted.sort(
+        key=lambda item: (
+            float(item.get("agent_score", 0)),
+            float(item.get("review_boost", 0)),
+            -float(item.get("start_distance_km", 0) or 0),
+        ),
+        reverse=True,
+    )
+    return boosted, [f"Tavily 리뷰 근거 검색 Tool: 후보 {searched}개 검색 후 review_boost를 agent_score에 반영"]
+
+
 def place_area_signature(place: dict[str, Any]) -> str:
     address = str(place.get("address") or "")
     name = str(place.get("name") or "")
@@ -3408,6 +3702,8 @@ def compact_candidate_for_llm(index: int, place: dict[str, Any]) -> dict[str, An
         "matched_tags": place.get("matched_tags", []),
         "quality_score": place.get("quality_score"),
         "agent_score": place.get("agent_score"),
+        "review_boost": place.get("review_boost", 0),
+        "review_evidence": place.get("review_evidence", []),
         "start_distance_km": place.get("start_distance_km"),
         "address": place.get("address"),
         "source": place.get("source"),
@@ -3469,11 +3765,13 @@ def constrained_candidate_score(
     place: dict[str, Any],
     remaining_budget: int,
     transport: str,
+    intent: dict[str, Any] | None = None,
 ) -> float:
     distance = haversine_km(current, place)
     affordability_bonus = max(0.0, (remaining_budget - place["cost"]) / max(remaining_budget, 1)) * 3.0
     score = float(place.get("agent_score", place.get("score", 0))) + affordability_bonus
-    score -= distance * (2.0 if transport == "도보 중심" else 0.35)
+    distance_weight = 1.0 if intent and intent.get("needs_short_route") else 0.35
+    score -= distance * (2.0 if transport == "도보 중심" else distance_weight)
     score -= place["cost"] / 10000
     return score
 
@@ -3493,6 +3791,7 @@ def enforce_day_trip_constraints(
     state: AgentState,
     route: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
+    intent: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     slots = itinerary_slots("당일치기")
 
@@ -3549,6 +3848,7 @@ def enforce_day_trip_constraints(
                             place,
                             remaining_budget,
                             state["transport"],
+                            intent,
                         ),
                     ),
                     slot,
@@ -3605,7 +3905,7 @@ def llm_route_planner_tool(
         "이전 추천에 이미 나온 장소는 다시 고르지 마라. "
         "이번 호출 한 번 안에서 밥집, 카페, 놀거리/관광지, 이동 순서를 모두 결정해라. "
         "규칙 점수는 참고자료일 뿐이고, 최종 선택은 네가 사용자 의도, 품질점수, 실제 방문 가능성, "
-        "거리, 예산, 카테고리 균형을 비교해서 결정한다. "
+        "거리, 예산, 카테고리 균형, review_boost 외부 리뷰 근거를 비교해서 결정한다. "
         "같은 동네와 같은 음식 종류가 반복되면 감점해라. "
         "출발지가 충북대이면 사창동, 개신동, 복대동 후보를 우선 비교하고, "
         "출발지가 청주고속버스터미널이면 가경동, 청주 터미널, 지웰시티, 현대백화점 주변 후보를 우선 비교해라. "
@@ -3619,6 +3919,7 @@ def llm_route_planner_tool(
         "\"rejected_notes\":[\"제외 판단\"]}.\n"
         "selected 개수는 slots 개수를 넘기지 말고, 예산 안에 최대한 맞춰라.\n\n"
         f"사용자 요청: {state['style_text']}\n"
+        f"보조 선택 키워드: {json.dumps(state.get('selected_keywords', []), ensure_ascii=False)}\n"
         f"대화 메모리: {json.dumps(state.get('memory_context', []), ensure_ascii=False)}\n"
         f"이번 추천에서 제외해야 하는 이전 추천 장소: {json.dumps(excluded_place_names, ensure_ascii=False)}\n"
         f"LLM 의도 해석: {json.dumps(intent, ensure_ascii=False)}\n"
@@ -3868,6 +4169,7 @@ def output_parser(
     intent: dict[str, Any] | None = None,
     planner_decision: dict[str, Any] | None = None,
     rag_document_count: int = 0,
+    tool_events: list[str] | None = None,
 ) -> dict[str, Any]:
     place_cost = sum(place["cost"] for place in route)
     accommodation = accommodation if accommodation is not None else accommodation_tool(state, route, place_cost)
@@ -3940,6 +4242,8 @@ def output_parser(
                 "map_url": place.get("map_url") or place.get("url") or kakao_map_search_url(place["name"], place.get("address", "")),
                 "source": place.get("source"),
                 "quality_score": place.get("quality_score"),
+                "review_boost": place.get("review_boost", 0),
+                "review_evidence": place.get("review_evidence", []),
                 "llm_reason": place.get("llm_reason"),
             }
             for place in route
@@ -3954,11 +4258,13 @@ def output_parser(
             "Fallback Middleware",
             "LangGraph StateGraph: analyze_intent",
             "LangChain PydanticOutputParser: TravelIntent",
-            "LLM 여행 의도 해석 Tool",
+            "자연어 의도 분석 Tool",
+            f"Agent Tool 선택 계획: {' → '.join((intent or {}).get('tool_plan', []))}",
             "LangGraph StateGraph: retrieve_places",
-            "로컬 JSON 장소 DB → LangChain Document Retriever",
+            "RAG 후보 검색 Tool: 로컬 JSON 장소 DB → LangChain Document Retriever",
             "검색된 후보를 LLM Context로 제공",
             "품질/실재성 필터 Tool",
+            *(tool_events or []),
             "LangGraph StateGraph: plan_route",
             "LLM 후보 비교/동선 선택 Tool",
             "add_conditional_edges: LLM 실패 시 fallback_route",
@@ -3967,6 +4273,7 @@ def output_parser(
             "로컬 JSON 장소 DB",
             "LangGraph StateGraph: final_response",
             "거리 계산 Tool",
+            "ODSay 대중교통 Tool: 대중교통 장거리 구간 경로 확인",
             "동선 최적화 Tool",
             "Context 생성",
             "LLM 응답 생성 Tool",
@@ -3998,6 +4305,8 @@ def build_llm_context(
             "cost": place["cost"],
             "indoor": place["indoor"],
             "agent_score": place["agent_score"],
+            "review_boost": place.get("review_boost", 0),
+            "review_evidence": place.get("review_evidence", []),
         }
         for place in route
     ]
@@ -4038,7 +4347,7 @@ def fast_final_comment(
         route_preview += " → ..."
     lodging_note = f" 마지막은 {accommodation['name']} 체크인까지 이어집니다." if accommodation else ""
     return (
-        f"{state['transport']} 이동과 선택 키워드를 기준으로 {route_preview} 순서가 가장 무난합니다. "
+        f"{state['transport']} 이동과 자연어 요청을 기준으로 {route_preview} 순서가 가장 무난합니다. "
         f"예상 비용은 {total_cost:,}원, 이동은 약 {total_move_minutes}분/{total_distance}km입니다."
         f"{lodging_note}"
     )
@@ -4108,8 +4417,9 @@ def analyze_intent_node(graph_state: AgentGraphState) -> AgentGraphState:
 def retrieve_places_node(graph_state: AgentGraphState) -> AgentGraphState:
     state = graph_state["state"]
     tags = graph_state.get("tags", state["tags"])
+    intent = graph_state.get("intent", {})
     try:
-        slots, candidates = candidate_lookup_tool(state, tags)
+        slots, candidates = candidate_lookup_tool(state, tags, intent)
     except RuntimeError as error:
         errors = [
             str(error),
@@ -4119,10 +4429,12 @@ def retrieve_places_node(graph_state: AgentGraphState) -> AgentGraphState:
             ),
         ]
         return {"errors": errors, "status": 503, "result": {"errors": errors}}
+    candidates, tool_events = tavily_review_boost_tool(state, intent, candidates)
     return {
         "slots": slots,
         "candidates": candidates,
         "retrieved_documents": retrieve_place_documents(candidates),
+        "tool_events": tool_events,
     }
 
 
@@ -4155,6 +4467,7 @@ def fallback_route_node(graph_state: AgentGraphState) -> AgentGraphState:
         state["start_point"],
         state["transport"],
         excluded_place_names,
+        graph_state.get("intent", {}),
     )
     return {
         "recommended": recommended,
@@ -4188,6 +4501,7 @@ def final_response_node(graph_state: AgentGraphState) -> AgentGraphState:
         state,
         recommended,
         graph_state.get("candidates", []),
+        graph_state.get("intent", {}),
     )
     if constrained != recommended:
         state["warnings"].append("당일치기 제약에 맞춰 예산 초과 또는 도보 15분 초과 후보를 제외했습니다.")
@@ -4211,6 +4525,7 @@ def final_response_node(graph_state: AgentGraphState) -> AgentGraphState:
         intent=graph_state.get("intent", {}),
         planner_decision=graph_state.get("planner_decision", {}),
         rag_document_count=len(graph_state.get("retrieved_documents", [])),
+        tool_events=graph_state.get("tool_events", []),
     )
     remember_turn(state["session_id"], graph_state["payload"], result)
     return {"state": state, "accommodation": accommodation, "legs": legs, "result": result, "status": 200}

@@ -37,11 +37,20 @@
             </select>
           </label>
 
-          <input type="hidden" name="style_text" id="styleText" />
+          <label>
+            자연어 요청
+            <textarea
+              name="style_text"
+              id="styleText"
+              rows="5"
+              placeholder="예: 청주에서 리뷰 좋고 가족끼리 가기 좋은 카페랑 관광지 위주로 추천해줘"
+              required
+            ></textarea>
+          </label>
           <input type="hidden" name="weather" value="맑음" />
 
           <fieldset class="keyword-field">
-            <legend>키워드</legend>
+            <legend>보조 키워드</legend>
             <div class="keyword-grid">
               <label><input type="checkbox" name="keywords" value="맛집" />맛집</label>
               <label><input type="checkbox" name="keywords" value="카페" />카페</label>
@@ -78,10 +87,10 @@
 
       <section class="panel result-panel">
         <div id="emptyState" class="empty-state">
-          <h2>취향만 입력하면 장소와 동선을 자동으로 고릅니다.</h2>
+          <h2>자연어로 요청하면 Agent가 도구를 골라 동선을 만듭니다.</h2>
           <p>
             장소명은 직접 입력하지 않아도 됩니다. Agent가 관광 API에서 수집한
-            로컬 JSON DB, 태그 분석, 거리 계산을 순서대로 실행합니다.
+            로컬 JSON DB, 외부 리뷰 검색, 거리 계산을 필요한 순서대로 실행합니다.
           </p>
         </div>
 
@@ -186,13 +195,17 @@
         const keywords = keywordInputs
           .filter((input) => input.checked)
           .map((input) => input.value);
-        if (!keywords.length) {
-          alert("키워드를 하나 이상 선택해주세요.");
+        const styleText = styleInput.value.trim();
+        if (!styleText) {
+          alert("원하는 여행 스타일을 자연어로 입력해주세요.");
           return;
         }
-        styleInput.value = keywords.join(" ");
-        payload.keywords = keywords;
-        payload.style_text = styleInput.value;
+        if (keywords.length) {
+          payload.keywords = keywords;
+        } else {
+          delete payload.keywords;
+        }
+        payload.style_text = styleText;
 
         const response = await fetch("/api/recommend", {
           method: "POST",
@@ -274,6 +287,12 @@
               <div>
                 <h4>${place.name}</h4>
                 <p>${place.slot_label || place.category} · ${place.category} · Agent Score ${place.score}</p>
+                ${place.review_boost ? `<p>Review Boost +${place.review_boost}</p>` : ""}
+                ${
+                  place.review_evidence && place.review_evidence.length
+                    ? `<p>${place.review_evidence.join(" / ")}</p>`
+                    : ""
+                }
                 ${place.address ? `<p>${place.address}</p>` : ""}
                 ${place.phone ? `<p>${place.phone}</p>` : ""}
                 <a href="${place.map_url}" target="_blank" rel="noreferrer">카카오맵에서 보기</a>
