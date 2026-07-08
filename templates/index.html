@@ -307,7 +307,7 @@
           renderResult(data);
         } catch (error) {
           alert(
-            "서버 연결에 실패했습니다. Flask 서버가 실행 중인지 확인해 주세요.",
+            "서버 연결에 실패했습니다. uvicorn 서버가 실행 중인지 확인해 주세요.",
           );
         } finally {
           submitButton.disabled = false;

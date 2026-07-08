@@ -331,6 +331,7 @@ h3 {
 
 .place-card {
   display: grid;
+  align-content: start;
   gap: 12px;
   padding: 16px;
   border: 1px solid var(--line);
@@ -372,12 +373,18 @@ h3 {
 .agent-stats {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
+  align-content: flex-start;
   gap: 8px;
 }
 
 .chips span,
 .flow span,
 .agent-stats span {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  min-height: 34px;
   border-radius: 999px;
   padding: 7px 10px;
   background: var(--soft);

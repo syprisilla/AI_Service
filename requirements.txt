@@ -1,4 +1,5 @@
 flask
+uvicorn
 python-dotenv
 langchain
 langchain-community
