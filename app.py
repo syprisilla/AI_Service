@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import logging
 
 os.environ["MODEL_PROVIDER"] = "openai"
+logging.basicConfig(level=logging.INFO)
 
 from trip_agent.web import create_app
 

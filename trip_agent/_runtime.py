@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import json
+import logging
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import Any, Literal, TypedDict
 
 from .providers import get_model_provider
+
+logger = logging.getLogger(__name__)
 
 try:
     from pydantic import BaseModel, Field, ValidationError
@@ -2311,6 +2314,7 @@ def odsay_transit_options(start: dict[str, float], end: dict[str, float]) -> tup
         )
         payload = parse_api_payload(raw)
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, ET.ParseError, OSError) as error:
+        logger.warning("ODsay route failed: %s", error)
         return [], str(error)
 
     if isinstance(payload, dict) and payload.get("error"):
@@ -2318,7 +2322,9 @@ def odsay_transit_options(start: dict[str, float], end: dict[str, float]) -> tup
         if isinstance(errors, list) and errors:
             message = errors[0].get("message") if isinstance(errors[0], dict) else str(errors[0])
             code = errors[0].get("code") if isinstance(errors[0], dict) else ""
+            logger.warning("ODsay API error %s: %s", code, message)
             return [], f"ODsay API 오류 {code}: {message}".strip()
+        logger.warning("ODsay API error: %s", payload.get("error"))
         return [], f"ODsay API 오류: {payload.get('error')}"
 
     paths = payload.get("result", {}).get("path", []) if isinstance(payload, dict) else []
@@ -2334,6 +2340,7 @@ def odsay_transit_options(start: dict[str, float], end: dict[str, float]) -> tup
         cache[key] = options
         save_odsay_cache(cache)
         return options, None
+    logger.warning("ODsay route failed: no transit path")
     return [], "ODsay 대중교통 경로 없음"
 
 
@@ -2400,6 +2407,10 @@ class AgentGraphState(TypedDict, total=False):
     recommended: list[dict[str, Any]]
     planner_mode: str
     planner_decision: dict[str, Any]
+    retry_count: int
+    quality_status: str
+    quality_route: str
+    quality_reasons: list[str]
     tool_events: list[str]
     accommodation: dict[str, Any] | None
     legs: list[dict[str, Any]]
@@ -3820,6 +3831,7 @@ def retrieve_place_documents(candidates: list[dict[str, Any]], max_documents: in
 def tavily_search(query: str, max_results: int = 4) -> list[dict[str, Any]]:
     api_key = TAVILY_API_KEY
     if not api_key:
+        logger.warning("Tavily search skipped: TAVILY_API_KEY is not configured")
         return []
     payload = {
         "api_key": api_key,
@@ -3885,6 +3897,7 @@ def tavily_review_boost_tool(
                 results = tavily_search(query)
                 review_boost, evidence = review_evidence_score(results)
             except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, OSError) as error:
+                logger.warning("Tavily review search failed: %s", error)
                 state["warnings"].append(f"Tavily 리뷰 근거 검색 Tool 실패: {error}")
                 return candidates, ["Tavily 리뷰 근거 검색 Tool: 호출 실패로 기존 후보 점수 유지"]
             updated["review_boost"] = review_boost
@@ -4187,10 +4200,12 @@ def llm_route_planner_tool(
     provider = model_provider()
     parsed, mode = provider.json_tool(prompt, temperature=0.25, timeout=25)
     if not parsed:
+        logger.warning("LLM route planner failed: %s", mode)
         return [], f"LLM 동선 선택 Fallback: {mode}", {}
 
     selected_items = parsed.get("selected", [])
     if not isinstance(selected_items, list):
+        logger.warning("LLM route planner returned invalid JSON shape")
         return [], "LLM 동선 선택 JSON 형식 오류 Fallback", parsed
     route = hydrate_llm_route(selected_items, candidates, slots, tags)
     return route, f"{provider.name} LLM 동선 선택", parsed
@@ -4327,16 +4342,13 @@ def distance_tool(
                 # 15분 넘으면 무조건 대중교통 시도
                 transit_options, transit_error = odsay_transit_options(current, place)
 
-                print(
-                    "[ODsay DEBUG]",
+                logger.info(
+                    "ODsay route checked: %s -> %s options=%s error=%s",
                     current_name,
-                    "->",
                     place["name"],
-                    "options:",
                     len(transit_options),
-                    "error:",
                     transit_error,
-                    )
+                )
                 
                 if transit_options:
                     mode = "transit"
@@ -4716,12 +4728,15 @@ def output_parser(
             f"Agent Tool 선택 계획: {' → '.join((intent or {}).get('tool_plan', []))}",
             "LangGraph StateGraph: retrieve_places",
             "RAG 후보 검색 Tool: 로컬 JSON 장소 DB → LangChain Document Retriever",
+            "VectorStore RAG Retriever: Document → Embeddings → FAISS/Chroma → retriever.invoke",
             "검색된 후보를 LLM Context로 제공",
             "품질/실재성 필터 Tool",
             *(tool_events or []),
             "LangGraph StateGraph: plan_route",
             "LLM 후보 비교/동선 선택 Tool",
-            "add_conditional_edges: LLM 실패 시 fallback_route",
+            "LangGraph StateGraph: check_quality",
+            "품질 검사 기반 반복 Loop: quality_low and retry_count < 1이면 retrieve_places 재실행",
+            "add_conditional_edges: 품질 낮음/재시도 소진 시 fallback_route 또는 final_response",
             "LangGraph StateGraph: fallback_route",
             "규칙 기반 Fallback Tool",
             "로컬 JSON 장소 DB",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from . import _runtime
@@ -7,6 +8,7 @@ from .data_sources.local_db import PLACE_DB_PATH, sync_place_db
 from .memory import remember_turn, used_place_names_from_memory
 from .middleware import normalize_session_id, validate_and_normalize
 from .output import output_parser
+from .rag import retrieve_relevant_place_documents
 from .state import AgentGraphState
 from .tools.intent import llm_intent_tool
 from .tools.planner import append_missing_keyword_warnings, llm_route_planner_tool
@@ -23,6 +25,7 @@ BASE_DIR = _runtime.BASE_DIR
 GRAPH_MEMORY = _runtime.GRAPH_MEMORY
 END = _runtime.END
 StateGraph = _runtime.StateGraph
+logger = logging.getLogger(__name__)
 
 
 def validate_input_node(graph_state: AgentGraphState) -> AgentGraphState:
@@ -44,9 +47,16 @@ def retrieve_places_node(graph_state: AgentGraphState) -> AgentGraphState:
     state = graph_state["state"]
     tags = graph_state.get("tags", state["tags"])
     intent = graph_state.get("intent", {})
+    retry_count = graph_state.get("retry_count", 0)
     try:
-        slots, candidates = candidate_lookup_tool(state, tags, intent)
+        slots, candidates = candidate_lookup_tool(
+            state,
+            tags,
+            intent,
+            max_candidates=72 if retry_count else 48,
+        )
     except RuntimeError as error:
+        logger.error("Place candidate lookup failed: %s", error)
         errors = [
             str(error),
             (
@@ -57,10 +67,33 @@ def retrieve_places_node(graph_state: AgentGraphState) -> AgentGraphState:
         return {"errors": errors, "status": 503, "result": {"errors": errors}}
 
     candidates, tool_events = tavily_review_boost_tool(state, intent, candidates)
+    user_query = " ".join(
+        [
+            state["style_text"],
+            " ".join(tags),
+            json_dumps_for_query(intent),
+        ]
+    )
+    vector_documents = retrieve_relevant_place_documents(user_query, max_documents=10 if retry_count else 8)
+    vector_names = {
+        str(document.get("metadata", {}).get("name"))
+        for document in vector_documents
+        if document.get("metadata", {}).get("name")
+    }
+    if vector_names:
+        for candidate in candidates:
+            if candidate.get("name") in vector_names:
+                candidate["agent_score"] = round(float(candidate.get("agent_score", 0)) + 1.5, 2)
+        candidates.sort(key=lambda item: float(item.get("agent_score", 0)), reverse=True)
+        tool_events.append(f"VectorStore RAG Retriever: 관련 장소 문서 {len(vector_documents)}개를 LLM Context와 후보 점수에 반영")
+    else:
+        tool_events.append("VectorStore RAG Retriever: 관련 문서 없음 또는 임베딩 backend 없음")
+    if retry_count:
+        tool_events.append(f"품질 검사 기반 재검색 Loop: retry_count={retry_count}")
     return {
         "slots": slots,
         "candidates": candidates,
-        "retrieved_documents": retrieve_place_documents(candidates),
+        "retrieved_documents": vector_documents + retrieve_place_documents(candidates),
         "tool_events": tool_events,
     }
 
@@ -79,6 +112,63 @@ def plan_route_node(graph_state: AgentGraphState) -> AgentGraphState:
         "recommended": recommended,
         "planner_mode": planner_mode,
         "planner_decision": planner_decision,
+    }
+
+
+def json_dumps_for_query(value: Any) -> str:
+    try:
+        import json
+
+        return json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        return str(value)
+
+
+def check_quality_node(graph_state: AgentGraphState) -> AgentGraphState:
+    state = graph_state["state"]
+    recommended = graph_state.get("recommended", [])
+    slots = graph_state.get("slots", [])
+    retry_count = graph_state.get("retry_count", 0)
+    required_roles = {slot.get("role") for slot in slots if slot.get("role")}
+    selected_roles = {place.get("slot_role") or place.get("role") for place in recommended if place.get("slot_role") or place.get("role")}
+    missing_roles = sorted(required_roles - selected_roles)
+    target_count = min(len(slots), 5) if slots else 3
+    average_quality = (
+        sum(float(place.get("quality_score") or place.get("score") or 0) for place in recommended) / len(recommended)
+        if recommended
+        else 0
+    )
+
+    reasons: list[str] = []
+    if not recommended:
+        reasons.append("LLM이 추천 장소를 선택하지 못했습니다.")
+    if len(recommended) < max(1, target_count - 1):
+        reasons.append(f"추천 장소 수가 부족합니다. selected={len(recommended)}, target={target_count}")
+    if missing_roles:
+        reasons.append(f"일정 구성에 필요한 role이 부족합니다: {', '.join(missing_roles)}")
+    if recommended and average_quality < 3.2:
+        reasons.append(f"추천 평균 품질 점수가 낮습니다: {average_quality:.2f}")
+
+    if not reasons:
+        return {
+            "quality_status": "quality_ok",
+            "quality_route": "final_response",
+            "quality_reasons": [],
+        }
+
+    logger.warning("Route quality low: %s", " / ".join(reasons))
+    state["warnings"].append("추천 품질 검사: " + " / ".join(reasons))
+    if retry_count < 1:
+        return {
+            "retry_count": retry_count + 1,
+            "quality_status": "quality_low",
+            "quality_route": "retry",
+            "quality_reasons": reasons,
+        }
+    return {
+        "quality_status": "quality_low",
+        "quality_route": "fallback_route" if not recommended or missing_roles else "final_response",
+        "quality_reasons": reasons,
     }
 
 
@@ -166,8 +256,8 @@ def route_after_retrieve(graph_state: AgentGraphState) -> str:
     return "final_response" if graph_state.get("errors") else "plan_route"
 
 
-def route_after_plan(graph_state: AgentGraphState) -> str:
-    return "fallback_route" if not graph_state.get("recommended") else "final_response"
+def route_after_quality(graph_state: AgentGraphState) -> str:
+    return graph_state.get("quality_route", "final_response")
 
 
 def build_agent_graph() -> Any:
@@ -178,6 +268,7 @@ def build_agent_graph() -> Any:
     graph_builder.add_node("analyze_intent", analyze_intent_node)
     graph_builder.add_node("retrieve_places", retrieve_places_node)
     graph_builder.add_node("plan_route", plan_route_node)
+    graph_builder.add_node("check_quality", check_quality_node)
     graph_builder.add_node("fallback_route", fallback_route_node)
     graph_builder.add_node("final_response", final_response_node)
     graph_builder.set_entry_point("validate_input")
@@ -192,10 +283,11 @@ def build_agent_graph() -> Any:
         route_after_retrieve,
         {"plan_route": "plan_route", "final_response": "final_response"},
     )
+    graph_builder.add_edge("plan_route", "check_quality")
     graph_builder.add_conditional_edges(
-        "plan_route",
-        route_after_plan,
-        {"fallback_route": "fallback_route", "final_response": "final_response"},
+        "check_quality",
+        route_after_quality,
+        {"retry": "retrieve_places", "fallback_route": "fallback_route", "final_response": "final_response"},
     )
     graph_builder.add_edge("fallback_route", "final_response")
     graph_builder.add_edge("final_response", END)
@@ -217,7 +309,14 @@ def run_agent(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
         if graph_state.get("errors"):
             return graph_state["result"], graph_state.get("status", 503)
         graph_state.update(plan_route_node(graph_state))
-        if not graph_state.get("recommended"):
+        graph_state.update(check_quality_node(graph_state))
+        if graph_state.get("quality_route") == "retry":
+            graph_state.update(retrieve_places_node(graph_state))
+            if graph_state.get("errors"):
+                return graph_state["result"], graph_state.get("status", 503)
+            graph_state.update(plan_route_node(graph_state))
+            graph_state.update(check_quality_node(graph_state))
+        if graph_state.get("quality_route") == "fallback_route":
             graph_state.update(fallback_route_node(graph_state))
         graph_state.update(final_response_node(graph_state))
     else:

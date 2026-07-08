@@ -1,7 +1,10 @@
 flask
 python-dotenv
 langchain
+langchain-community
 langchain-openai
 langgraph
 pydantic
 requests
+faiss-cpu
+sentence-transformers

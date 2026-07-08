@@ -25,6 +25,10 @@ ENV/
 server.out.log
 server.err.log
 data/*.json
+data/vectorstore/
+data/faiss_index/
+*.sqlite3
+*.sqlite
 
 # Editor and local tool metadata
 .vscode/
