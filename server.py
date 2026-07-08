@@ -15,6 +15,12 @@ from typing import Any, Literal, TypedDict
 from dotenv import load_dotenv
 from prompts import FINAL_COMMENT_PROMPT, INTENT_ANALYSIS_PROMPT, ROUTE_PLANNER_PROMPT
 
+from rag import (
+    retrieve_relevant_place_documents,
+    rebuild_place_vectorstore,
+    candidate_documents_to_context,
+)
+
 try:
     from langchain_openai import ChatOpenAI
 except ImportError:
@@ -1121,66 +1127,6 @@ def model_provider():
     return get_model_provider()
 
 
-def place_to_document(place: dict[str, Any]) -> Any:
-    page_content = (
-        f"{place.get('name', '')}\n"
-        f"category={place.get('category', '')}; role={place.get('role', '')}; "
-        f"tags={', '.join(place.get('tags', []))}; "
-        f"address={place.get('address', '')}; phone={place.get('phone', '')}; "
-        f"source={place.get('source', '')}; score={place.get('score', '')}; "
-        f"quality_score={place.get('quality_score', '')}"
-    )
-    metadata = {
-        "name": place.get("name"),
-        "category": place.get("category"),
-        "role": place.get("role"),
-        "tags": ",".join(place.get("tags", [])),
-        "address": place.get("address"),
-        "source": place.get("source"),
-    }
-    if Document:
-        return Document(page_content=page_content, metadata=metadata)
-    return {"page_content": page_content, "metadata": metadata}
-
-
-def documents_to_context(documents: list[Any]) -> list[dict[str, Any]]:
-    contexts: list[dict[str, Any]] = []
-    for document in documents:
-        if Document and isinstance(document, Document):
-            contexts.append({"page_content": document.page_content, "metadata": document.metadata})
-        else:
-            contexts.append(
-                {
-                    "page_content": document.get("page_content", ""),
-                    "metadata": document.get("metadata", {}),
-                }
-            )
-    return contexts
-
-
-def keyword_retrieve(query: str, max_documents: int = 8) -> list[dict[str, Any]]:
-    terms = [term for term in query.replace(",", " ").split() if term]
-    scored: list[tuple[int, dict[str, Any]]] = []
-    for place in load_place_db():
-        text = " ".join(
-            [
-                str(place.get("name", "")),
-                str(place.get("category", "")),
-                str(place.get("role", "")),
-                " ".join(place.get("tags", [])),
-                str(place.get("address", "")),
-            ]
-        )
-        score = sum(1 for term in terms if term in text)
-        if score:
-            scored.append((score, place))
-    scored.sort(key=lambda item: (item[0], float(item[1].get("score", 0) or 0)), reverse=True)
-    return documents_to_context([place_to_document(place) for _, place in scored[:max_documents]])
-
-
-def retrieve_relevant_place_documents(query: str, max_documents: int = 8) -> list[dict[str, Any]]:
-    return keyword_retrieve(query, max_documents=max_documents)
-
 
 def env_flag(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
@@ -2282,20 +2228,6 @@ def candidate_lookup_tool(
     return slots, selected[:max_candidates]
 
 
-def document_to_context(document: Any) -> dict[str, Any]:
-    if Document and isinstance(document, Document):
-        return {"page_content": document.page_content, "metadata": document.metadata}
-    return {
-        "page_content": document.get("page_content", ""),
-        "metadata": document.get("metadata", {}),
-    }
-
-
-def retrieve_place_documents(candidates: list[dict[str, Any]], max_documents: int = 12) -> list[dict[str, Any]]:
-    documents = [place_to_document(place) for place in candidates[:max_documents]]
-    return [document_to_context(document) for document in documents]
-
-
 def tavily_search(query: str, max_results: int = 4) -> list[dict[str, Any]]:
     api_key = TAVILY_API_KEY
     if not api_key:
@@ -3323,15 +3255,15 @@ def retrieve_places_node(graph_state: AgentGraphState) -> AgentGraphState:
             if candidate.get("name") in vector_names:
                 candidate["agent_score"] = round(float(candidate.get("agent_score", 0)) + 1.5, 2)
         candidates.sort(key=lambda item: float(item.get("agent_score", 0)), reverse=True)
-        tool_events.append(f"VectorStore RAG Retriever: 관련 장소 문서 {len(vector_documents)}개를 LLM Context와 후보 점수에 반영")
+        tool_events.append(f"FAISS VectorStore RAG Retriever: 관련 장소 문서 {len(vector_documents)}개를 LLM Context와 후보 점수에 반영")
     else:
-        tool_events.append("VectorStore RAG Retriever: 관련 문서 없음 또는 임베딩 backend 없음")
+        tool_events.append("FAISS VectorStore RAG Retriever: 관련 문서 없음 또는 임베딩 backend 없음")
     if retry_count:
         tool_events.append(f"품질 검사 기반 재검색 Loop: retry_count={retry_count}")
     return {
         "slots": slots,
         "candidates": candidates,
-        "retrieved_documents": vector_documents + retrieve_place_documents(candidates),
+        "retrieved_documents": vector_documents + candidate_documents_to_context(candidates),
         "tool_events": tool_events,
     }
 
@@ -3603,6 +3535,7 @@ async def recommend(payload: dict[str, Any]):
 async def sync_places_route():
     try:
         places = sync_place_db()
+        rag_document_count = rebuild_place_vectorstore()
     except RuntimeError as error:
         return JSONResponse({"errors": [str(error)]}, status_code=503)
     payload = json.loads(PLACE_DB_PATH.read_text(encoding="utf-8"))
@@ -3615,6 +3548,8 @@ async def sync_places_route():
         "source_counts": payload.get("source_counts", {}),
         "sync_errors": payload.get("sync_errors", []),
         "places": places,
+        "rag_document_count": rag_document_count,
+        "vectorstore": "FAISS",
     }
 
 
