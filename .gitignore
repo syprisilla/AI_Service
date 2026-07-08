@@ -19,16 +19,25 @@ ENV/
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.crt
 
 # Local server logs / runtime files
 *.log
 server.out.log
 server.err.log
+uvicorn.*.log
 data/*.json
+!data/app_config.json
+!data/places_cache.json
+!data/kakao_keywords.json
 data/vectorstore/
 data/faiss_index/
 *.sqlite3
 *.sqlite
+.coverage
+htmlcov/
 
 # Editor and local tool metadata
 .vscode/

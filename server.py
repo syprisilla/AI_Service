@@ -12,79 +12,126 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
-from .providers import get_model_provider
+from dotenv import load_dotenv
+from prompts import FINAL_COMMENT_PROMPT, INTENT_ANALYSIS_PROMPT, ROUTE_PLANNER_PROMPT
+
+try:
+    from langchain_openai import ChatOpenAI
+except ImportError:
+    ChatOpenAI = None
+
+
+class OpenAIProvider:
+    name = "OpenAI LangChain"
+
+    def _llm(self, temperature: float, timeout: int) -> Any:
+        if ChatOpenAI is None:
+            raise RuntimeError("langchain-openai 미설치")
+        return ChatOpenAI(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            temperature=temperature,
+            timeout=timeout,
+        )
+
+    @staticmethod
+    def _message_text(message: Any) -> str:
+        content = getattr(message, "content", message)
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("text"):
+                    parts.append(str(item["text"]))
+                elif isinstance(item, str):
+                    parts.append(item)
+            return "\n".join(parts).strip()
+        return str(content).strip()
+
+    def _prompt_chain(self, temperature: float, timeout: int, parser: Any | None = None) -> Any:
+        if PromptTemplate is None:
+            raise RuntimeError("langchain-core PromptTemplate 미설치")
+        output_parser = parser or (StrOutputParser() if StrOutputParser else None)
+        chain = PromptTemplate.from_template("{prompt}") | self._llm(temperature, timeout)
+        return chain | output_parser if output_parser else chain
+
+    def text_tool(self, prompt: str, temperature: float = 0.2, timeout: int = 18) -> tuple[str | None, str]:
+        if not os.getenv("OPENAI_API_KEY"):
+            return None, "OPENAI_API_KEY 없음"
+        try:
+            message = self._prompt_chain(temperature, timeout).invoke({"prompt": prompt})
+        except Exception as error:
+            return None, str(error)
+        return self._message_text(message), "OpenAI LangChain Runnable"
+
+    def json_tool(
+        self,
+        prompt: str,
+        parser: Any | None = None,
+        temperature: float = 0.2,
+        timeout: int = 18,
+    ) -> tuple[dict[str, Any] | None, str]:
+        if not os.getenv("OPENAI_API_KEY"):
+            return None, "OPENAI_API_KEY 없음"
+        try:
+            parsed = self._prompt_chain(temperature, timeout, parser).invoke({"prompt": prompt})
+            return parsed.model_dump() if hasattr(parsed, "model_dump") else parsed, "OpenAI LangChain Runnable"
+        except (ValidationError, ValueError, Exception) as error:
+            return None, f"LangChain OutputParser 실패: {error}"
+
+    def final_comment(self, prompt: str, temperature: float = 0.4, timeout: int = 12) -> tuple[str | None, str]:
+        return self.text_tool(prompt, temperature, timeout)
+
+
+def get_model_provider(name: str | None = None) -> OpenAIProvider:
+    return OpenAIProvider()
 
 logger = logging.getLogger(__name__)
 
-try:
-    from pydantic import BaseModel, Field, ValidationError
-except ImportError:
-    ValidationError = ValueError
-
-    def Field(default: Any = None, default_factory: Any = None, **_: Any) -> Any:
-        return default_factory() if default_factory else default
-
-    class BaseModel:
-        def __init__(self, **data: Any) -> None:
-            annotations = getattr(self, "__annotations__", {})
-            for key, default in self.__class__.__dict__.items():
-                if key.startswith("_") or callable(default):
-                    continue
-                if key in annotations and key not in data:
-                    setattr(self, key, default)
-            for key in annotations:
-                if key in data:
-                    setattr(self, key, data[key])
-
-        @classmethod
-        def model_validate(cls, data: dict[str, Any]) -> Any:
-            return cls(**data)
-
-        def model_dump(self) -> dict[str, Any]:
-            return dict(self.__dict__)
+from pydantic import BaseModel, Field, ValidationError
 
 try:
     from langchain_core.documents import Document
     from langchain_core.output_parsers import PydanticOutputParser
+    from langchain_core.output_parsers import StrOutputParser
+    from langchain_core.prompts import PromptTemplate
+    from langchain_core.tools import tool
     from langgraph.checkpoint.memory import MemorySaver
     from langgraph.graph import END, StateGraph
 except ImportError:
     Document = None
     PydanticOutputParser = None
+    StrOutputParser = None
+    PromptTemplate = None
+    tool = None
     MemorySaver = None
     END = "__end__"
     StateGraph = None
 
 
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-PLACE_DB_PATH = DATA_DIR / "cheongju_places.json"
+APP_CONFIG_PATH = DATA_DIR / "app_config.json"
+PLACE_DB_PATH = DATA_DIR / "places_cache.json"
+KAKAO_KEYWORDS_PATH = DATA_DIR / "kakao_keywords.json"
 
 
-def load_env_file() -> None:
-    env_path = BASE_DIR / ".env"
-    if not env_path.exists():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+load_dotenv(BASE_DIR / ".env")
 
 
-load_env_file()
+def load_json_file(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+APP_CONFIG = load_json_file(APP_CONFIG_PATH)
 
 
 CHUNGBUK_TOUR_API_URL = os.getenv(
     "CHUNGBUK_TOUR_API_URL",
     "https://tour.chungbuk.go.kr/openapi/tourInfo/attr.do",
 )
-TOUR_API_BASE_URL = "https://apis.data.go.kr/B551011/KorService1/areaBasedList1"
-TOUR_API_KEY = os.getenv("TOUR_API_KEY") or os.getenv("TOURAPI_SERVICE_KEY")
-TOUR_API_AREA_CODE = os.getenv("TOUR_API_AREA_CODE", "33")
-TOUR_API_SIGUNGU_CODE = os.getenv("TOUR_API_SIGUNGU_CODE", "10")
+
 KAKAO_LOCAL_API_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY") or os.getenv("KAKAO_API_KEY")
 ODSAY_TRANSIT_API_URL = "https://api.odsay.com/v1/api/searchPubTransPathT"
@@ -97,1414 +144,47 @@ DAY_TRIP_MAX_TRANSIT_LEGS = 2
 TRANSIT_OPTION_LIMIT = 4
 
 KAKAO_KEYWORD_SEARCHES = [
-    # =========================
-    # 공통: 청주 주요 상권/관광지
-    # =========================
-     # =========================
-    # 출발지: 충북대 기준
-    # =========================
-
-    # 음식점 - 기본
-    ("청주 충북대 맛집", "meal"),
-    ("청주 충북대 밥집", "meal"),
-    ("청주 충북대 점심", "meal"),
-    ("청주 충북대 저녁", "meal"),
-    ("청주 충북대 혼밥", "meal"),
-    ("청주 충북대 가성비 맛집", "meal"),
-    ("청주 충북대 학생 맛집", "meal"),
-    ("청주 충북대 중문 맛집", "meal"),
-    ("청주 충북대 정문 맛집", "meal"),
-    ("청주 충북대 후문 맛집", "meal"),
-
-    # 음식점 - 한식 / 국밥 / 찌개
-    ("청주 충북대 한식", "meal"),
-    ("청주 충북대 백반", "meal"),
-    ("청주 충북대 국밥", "meal"),
-    ("청주 충북대 순대국밥", "meal"),
-    ("청주 충북대 돼지국밥", "meal"),
-    ("청주 충북대 김치찌개", "meal"),
-    ("청주 충북대 된장찌개", "meal"),
-    ("청주 충북대 부대찌개", "meal"),
-    ("청주 충북대 제육", "meal"),
-    ("청주 충북대 덮밥", "meal"),
-
-    # 음식점 - 분식 / 간단식
-    ("청주 충북대 분식", "meal"),
-    ("청주 충북대 김밥", "meal"),
-    ("청주 충북대 떡볶이", "meal"),
-    ("청주 충북대 라면", "meal"),
-    ("청주 충북대 돈까스", "meal"),
-    ("청주 충북대 돈가스", "meal"),
-
-    # 음식점 - 일식 / 라멘 / 초밥
-    ("청주 충북대 라멘", "meal"),
-    ("청주 충북대 일본라멘", "meal"),
-    ("청주 충북대 일식", "meal"),
-    ("청주 충북대 초밥", "meal"),
-    ("청주 충북대 스시", "meal"),
-    ("청주 충북대 카츠", "meal"),
-    ("청주 충북대 규동", "meal"),
-
-    # 음식점 - 중식 / 마라탕
-    ("청주 충북대 중식", "meal"),
-    ("청주 충북대 짜장면", "meal"),
-    ("청주 충북대 짬뽕", "meal"),
-    ("청주 충북대 탕수육", "meal"),
-    ("청주 충북대 마라탕", "meal"),
-    ("청주 충북대 마라샹궈", "meal"),
-
-    # 음식점 - 양식 / 파스타 / 피자
-    ("청주 충북대 양식", "meal"),
-    ("청주 충북대 파스타", "meal"),
-    ("청주 충북대 피자", "meal"),
-    ("청주 충북대 리조또", "meal"),
-    ("청주 충북대 브런치", "meal"),
-    ("청주 충북대 햄버거", "meal"),
-    ("청주 충북대 버거", "meal"),
-
-    # 음식점 - 고기 / 치킨 / 술집 겸 식사
-    ("청주 충북대 고기집", "meal"),
-    ("청주 충북대 삼겹살", "meal"),
-    ("청주 충북대 갈비", "meal"),
-    ("청주 충북대 닭갈비", "meal"),
-    ("청주 충북대 곱창", "meal"),
-    ("청주 충북대 막창", "meal"),
-    ("청주 충북대 치킨", "meal"),
-    ("청주 충북대 족발", "meal"),
-    ("청주 충북대 보쌈", "meal"),
-
-    # 카페
-    ("청주 충북대 카페", "cafe"),
-    ("청주 충북대 디저트 카페", "cafe"),
-    ("청주 충북대 베이커리", "cafe"),
-    ("청주 충북대 커피", "cafe"),
-    ("청주 충북대 감성카페", "cafe"),
-    ("청주 충북대 공부 카페", "cafe"),
-    ("청주 충북대 케이크", "cafe"),
-
-    # 놀거리
-    ("청주 충북대 노래방", "activity"),
-    ("청주 충북대 코인노래방", "activity"),
-    ("청주 충북대 보드게임카페", "activity"),
-    ("청주 충북대 PC방", "activity"),
-    ("청주 충북대 볼링", "activity"),
-    ("청주 충북대 방탈출", "activity"),
-    ("청주 충북대 놀거리", "activity"),
-    ("청주 충북대 술집", "activity"),
-    ("청주 충북대 영화관", "activity"),
-    ("청주 충북대 산책", "activity"),
-    ("청주 충북대 사진", "activity"),
-
-    # 충북대 주변 지명 - 사창동
-    ("청주 사창동 맛집", "meal"),
-    ("청주 사창동 밥집", "meal"),
-    ("청주 사창동 점심", "meal"),
-    ("청주 사창동 저녁", "meal"),
-    ("청주 사창동 한식", "meal"),
-    ("청주 사창동 분식", "meal"),
-    ("청주 사창동 국밥", "meal"),
-    ("청주 사창동 돈까스", "meal"),
-    ("청주 사창동 라멘", "meal"),
-    ("청주 사창동 초밥", "meal"),
-    ("청주 사창동 마라탕", "meal"),
-    ("청주 사창동 고기집", "meal"),
-    ("청주 사창동 치킨", "meal"),
-    ("청주 사창동 파스타", "meal"),
-    ("청주 사창동 카페", "cafe"),
-    ("청주 사창동 디저트", "cafe"),
-    ("청주 사창동 노래방", "activity"),
-    ("청주 사창동 코인노래방", "activity"),
-    ("청주 사창동 보드게임카페", "activity"),
-    ("청주 사창동 놀거리", "activity"),
-
-    # 충북대 주변 지명 - 개신동
-    ("청주 개신동 맛집", "meal"),
-    ("청주 개신동 밥집", "meal"),
-    ("청주 개신동 점심", "meal"),
-    ("청주 개신동 저녁", "meal"),
-    ("청주 개신동 한식", "meal"),
-    ("청주 개신동 분식", "meal"),
-    ("청주 개신동 국밥", "meal"),
-    ("청주 개신동 돈까스", "meal"),
-    ("청주 개신동 라멘", "meal"),
-    ("청주 개신동 초밥", "meal"),
-    ("청주 개신동 마라탕", "meal"),
-    ("청주 개신동 고기집", "meal"),
-    ("청주 개신동 카페", "cafe"),
-    ("청주 개신동 디저트", "cafe"),
-    ("청주 개신동 노래방", "activity"),
-    ("청주 개신동 놀거리", "activity"),
-
-    # 충북대 주변 지명 - 복대동
-    ("청주 복대동 충북대 맛집", "meal"),
-    ("청주 복대동 맛집", "meal"),
-    ("청주 복대동 밥집", "meal"),
-    ("청주 복대동 점심", "meal"),
-    ("청주 복대동 저녁", "meal"),
-    ("청주 복대동 한식", "meal"),
-    ("청주 복대동 분식", "meal"),
-    ("청주 복대동 고기집", "meal"),
-    ("청주 복대동 카페", "cafe"),
-    ("청주 복대동 노래방", "activity"),
-    ("청주 복대동 보드게임카페", "activity"),
-    ("청주 복대동 놀거리", "activity"),
-
-        # =========================
-    # 출발지: 청주고속버스터미널 기준
-    # =========================
-
-    # 음식점 - 기본
-    ("청주고속버스터미널 맛집", "meal"),
-    ("청주고속버스터미널 밥집", "meal"),
-    ("청주고속버스터미널 점심", "meal"),
-    ("청주고속버스터미널 저녁", "meal"),
-    ("청주고속버스터미널 혼밥", "meal"),
-    ("청주고속버스터미널 가성비 맛집", "meal"),
-    ("청주고속버스터미널 터미널 맛집", "meal"),
-    ("청주고속버스터미널 근처 맛집", "meal"),
-    ("청주고속버스터미널 주변 맛집", "meal"),
-
-    # 음식점 - 한식 / 국밥 / 찌개
-    ("청주고속버스터미널 한식", "meal"),
-    ("청주고속버스터미널 백반", "meal"),
-    ("청주고속버스터미널 국밥", "meal"),
-    ("청주고속버스터미널 순대국밥", "meal"),
-    ("청주고속버스터미널 돼지국밥", "meal"),
-    ("청주고속버스터미널 김치찌개", "meal"),
-    ("청주고속버스터미널 된장찌개", "meal"),
-    ("청주고속버스터미널 부대찌개", "meal"),
-    ("청주고속버스터미널 제육", "meal"),
-    ("청주고속버스터미널 덮밥", "meal"),
-
-    # 음식점 - 분식 / 간단식
-    ("청주고속버스터미널 분식", "meal"),
-    ("청주고속버스터미널 김밥", "meal"),
-    ("청주고속버스터미널 떡볶이", "meal"),
-    ("청주고속버스터미널 라면", "meal"),
-    ("청주고속버스터미널 돈까스", "meal"),
-    ("청주고속버스터미널 돈가스", "meal"),
-
-    # 음식점 - 일식 / 초밥 / 라멘
-    ("청주고속버스터미널 일식", "meal"),
-    ("청주고속버스터미널 라멘", "meal"),
-    ("청주고속버스터미널 일본라멘", "meal"),
-    ("청주고속버스터미널 초밥", "meal"),
-    ("청주고속버스터미널 스시", "meal"),
-    ("청주고속버스터미널 카츠", "meal"),
-    ("청주고속버스터미널 규동", "meal"),
-
-    # 음식점 - 중식 / 마라탕
-    ("청주고속버스터미널 중식", "meal"),
-    ("청주고속버스터미널 짜장면", "meal"),
-    ("청주고속버스터미널 짬뽕", "meal"),
-    ("청주고속버스터미널 탕수육", "meal"),
-    ("청주고속버스터미널 마라탕", "meal"),
-    ("청주고속버스터미널 마라샹궈", "meal"),
-
-    # 음식점 - 양식 / 브런치 / 버거
-    ("청주고속버스터미널 양식", "meal"),
-    ("청주고속버스터미널 파스타", "meal"),
-    ("청주고속버스터미널 피자", "meal"),
-    ("청주고속버스터미널 리조또", "meal"),
-    ("청주고속버스터미널 브런치", "meal"),
-    ("청주고속버스터미널 햄버거", "meal"),
-    ("청주고속버스터미널 버거", "meal"),
-
-    # 음식점 - 고기 / 치킨 / 술집 겸 식사
-    ("청주고속버스터미널 고기집", "meal"),
-    ("청주고속버스터미널 삼겹살", "meal"),
-    ("청주고속버스터미널 갈비", "meal"),
-    ("청주고속버스터미널 닭갈비", "meal"),
-    ("청주고속버스터미널 곱창", "meal"),
-    ("청주고속버스터미널 막창", "meal"),
-    ("청주고속버스터미널 치킨", "meal"),
-    ("청주고속버스터미널 족발", "meal"),
-    ("청주고속버스터미널 보쌈", "meal"),
-
-    # 카페
-    ("청주고속버스터미널 카페", "cafe"),
-    ("청주고속버스터미널 디저트 카페", "cafe"),
-    ("청주고속버스터미널 베이커리", "cafe"),
-    ("청주고속버스터미널 커피", "cafe"),
-    ("청주고속버스터미널 감성카페", "cafe"),
-    ("청주고속버스터미널 공부 카페", "cafe"),
-    ("청주고속버스터미널 케이크", "cafe"),
-
-    # 놀거리
-    ("청주고속버스터미널 노래방", "activity"),
-    ("청주고속버스터미널 코인노래방", "activity"),
-    ("청주고속버스터미널 보드게임카페", "activity"),
-    ("청주고속버스터미널 PC방", "activity"),
-    ("청주고속버스터미널 피시방", "activity"),
-    ("청주고속버스터미널 볼링", "activity"),
-    ("청주고속버스터미널 방탈출", "activity"),
-    ("청주고속버스터미널 놀거리", "activity"),
-    ("청주고속버스터미널 술집", "activity"),
-    ("청주고속버스터미널 영화관", "activity"),
-    ("청주고속버스터미널 산책", "activity"),
-    ("청주고속버스터미널 사진", "activity"),
-
-    # =========================
-    # 고속버스터미널 주변 지명 - 가경동
-    # =========================
-    ("청주 가경동 맛집", "meal"),
-    ("청주 가경동 밥집", "meal"),
-    ("청주 가경동 점심", "meal"),
-    ("청주 가경동 저녁", "meal"),
-    ("청주 가경동 혼밥", "meal"),
-    ("청주 가경동 가성비 맛집", "meal"),
-    ("청주 가경동 한식", "meal"),
-    ("청주 가경동 백반", "meal"),
-    ("청주 가경동 국밥", "meal"),
-    ("청주 가경동 순대국밥", "meal"),
-    ("청주 가경동 김치찌개", "meal"),
-    ("청주 가경동 부대찌개", "meal"),
-    ("청주 가경동 제육", "meal"),
-    ("청주 가경동 분식", "meal"),
-    ("청주 가경동 김밥", "meal"),
-    ("청주 가경동 떡볶이", "meal"),
-    ("청주 가경동 돈까스", "meal"),
-    ("청주 가경동 돈가스", "meal"),
-    ("청주 가경동 라멘", "meal"),
-    ("청주 가경동 일식", "meal"),
-    ("청주 가경동 초밥", "meal"),
-    ("청주 가경동 스시", "meal"),
-    ("청주 가경동 중식", "meal"),
-    ("청주 가경동 짜장면", "meal"),
-    ("청주 가경동 짬뽕", "meal"),
-    ("청주 가경동 마라탕", "meal"),
-    ("청주 가경동 파스타", "meal"),
-    ("청주 가경동 피자", "meal"),
-    ("청주 가경동 브런치", "meal"),
-    ("청주 가경동 햄버거", "meal"),
-    ("청주 가경동 고기집", "meal"),
-    ("청주 가경동 삼겹살", "meal"),
-    ("청주 가경동 닭갈비", "meal"),
-    ("청주 가경동 곱창", "meal"),
-    ("청주 가경동 치킨", "meal"),
-    ("청주 가경동 족발", "meal"),
-
-    ("청주 가경동 카페", "cafe"),
-    ("청주 가경동 디저트", "cafe"),
-    ("청주 가경동 디저트 카페", "cafe"),
-    ("청주 가경동 베이커리", "cafe"),
-    ("청주 가경동 커피", "cafe"),
-    ("청주 가경동 감성카페", "cafe"),
-    ("청주 가경동 공부 카페", "cafe"),
-    ("청주 가경동 케이크", "cafe"),
-
-    ("청주 가경동 노래방", "activity"),
-    ("청주 가경동 코인노래방", "activity"),
-    ("청주 가경동 보드게임카페", "activity"),
-    ("청주 가경동 PC방", "activity"),
-    ("청주 가경동 피시방", "activity"),
-    ("청주 가경동 볼링", "activity"),
-    ("청주 가경동 방탈출", "activity"),
-    ("청주 가경동 놀거리", "activity"),
-    ("청주 가경동 술집", "activity"),
-    ("청주 가경동 영화관", "activity"),
-    ("청주 가경동 산책", "activity"),
-    ("청주 가경동 사진", "activity"),
-
-    # =========================
-    # 고속버스터미널 주변 지명 - 청주 터미널 표현
-    # =========================
-    ("청주 터미널 맛집", "meal"),
-    ("청주 터미널 밥집", "meal"),
-    ("청주 터미널 점심", "meal"),
-    ("청주 터미널 저녁", "meal"),
-    ("청주 터미널 혼밥", "meal"),
-    ("청주 터미널 가성비 맛집", "meal"),
-    ("청주 터미널 한식", "meal"),
-    ("청주 터미널 백반", "meal"),
-    ("청주 터미널 국밥", "meal"),
-    ("청주 터미널 순대국밥", "meal"),
-    ("청주 터미널 김치찌개", "meal"),
-    ("청주 터미널 부대찌개", "meal"),
-    ("청주 터미널 제육", "meal"),
-    ("청주 터미널 분식", "meal"),
-    ("청주 터미널 돈까스", "meal"),
-    ("청주 터미널 라멘", "meal"),
-    ("청주 터미널 일식", "meal"),
-    ("청주 터미널 초밥", "meal"),
-    ("청주 터미널 중식", "meal"),
-    ("청주 터미널 마라탕", "meal"),
-    ("청주 터미널 파스타", "meal"),
-    ("청주 터미널 피자", "meal"),
-    ("청주 터미널 브런치", "meal"),
-    ("청주 터미널 햄버거", "meal"),
-    ("청주 터미널 고기집", "meal"),
-    ("청주 터미널 삼겹살", "meal"),
-    ("청주 터미널 치킨", "meal"),
-    ("청주 터미널 족발", "meal"),
-
-    ("청주 터미널 카페", "cafe"),
-    ("청주 터미널 디저트", "cafe"),
-    ("청주 터미널 디저트 카페", "cafe"),
-    ("청주 터미널 베이커리", "cafe"),
-    ("청주 터미널 커피", "cafe"),
-    ("청주 터미널 감성카페", "cafe"),
-    ("청주 터미널 공부 카페", "cafe"),
-    ("청주 터미널 케이크", "cafe"),
-
-    ("청주 터미널 노래방", "activity"),
-    ("청주 터미널 코인노래방", "activity"),
-    ("청주 터미널 보드게임카페", "activity"),
-    ("청주 터미널 PC방", "activity"),
-    ("청주 터미널 피시방", "activity"),
-    ("청주 터미널 볼링", "activity"),
-    ("청주 터미널 방탈출", "activity"),
-    ("청주 터미널 놀거리", "activity"),
-    ("청주 터미널 술집", "activity"),
-    ("청주 터미널 영화관", "activity"),
-    ("청주 터미널 산책", "activity"),
-    ("청주 터미널 사진", "activity"),
-
-    # =========================
-    # 고속버스터미널 주변 확장 상권
-    # =========================
-    ("청주 지웰시티 맛집", "meal"),
-    ("청주 지웰시티 밥집", "meal"),
-    ("청주 지웰시티 점심", "meal"),
-    ("청주 지웰시티 저녁", "meal"),
-    ("청주 지웰시티 한식", "meal"),
-    ("청주 지웰시티 분식", "meal"),
-    ("청주 지웰시티 돈까스", "meal"),
-    ("청주 지웰시티 라멘", "meal"),
-    ("청주 지웰시티 초밥", "meal"),
-    ("청주 지웰시티 중식", "meal"),
-    ("청주 지웰시티 마라탕", "meal"),
-    ("청주 지웰시티 파스타", "meal"),
-    ("청주 지웰시티 고기집", "meal"),
-
-    ("청주 지웰시티 카페", "cafe"),
-    ("청주 지웰시티 디저트", "cafe"),
-    ("청주 지웰시티 베이커리", "cafe"),
-    ("청주 지웰시티 커피", "cafe"),
-    ("청주 지웰시티 감성카페", "cafe"),
-
-    ("청주 지웰시티 영화관", "activity"),
-    ("청주 지웰시티 놀거리", "activity"),
-    ("청주 지웰시티 PC방", "activity"),
-    ("청주 지웰시티 노래방", "activity"),
-    ("청주 지웰시티 보드게임카페", "activity"),
-
-    ("청주 현대백화점 맛집", "meal"),
-    ("청주 현대백화점 밥집", "meal"),
-    ("청주 현대백화점 점심", "meal"),
-    ("청주 현대백화점 저녁", "meal"),
-    ("청주 현대백화점 한식", "meal"),
-    ("청주 현대백화점 돈까스", "meal"),
-    ("청주 현대백화점 일식", "meal"),
-    ("청주 현대백화점 중식", "meal"),
-    ("청주 현대백화점 파스타", "meal"),
-    ("청주 현대백화점 고기집", "meal"),
-
-    ("청주 현대백화점 카페", "cafe"),
-    ("청주 현대백화점 디저트", "cafe"),
-    ("청주 현대백화점 베이커리", "cafe"),
-    ("청주 현대백화점 커피", "cafe"),
-
-    ("청주 현대백화점 영화관", "activity"),
-    ("청주 현대백화점 놀거리", "activity"),
-
-        # =========================
-    # 출발지: 오송역 기준
-    # =========================
-
-    # 음식점 - 오송역 기본
-    ("오송역 맛집", "meal"),
-    ("오송역 밥집", "meal"),
-    ("오송역 점심", "meal"),
-    ("오송역 저녁", "meal"),
-    ("오송역 혼밥", "meal"),
-    ("오송역 가성비 맛집", "meal"),
-    ("오송역 근처 맛집", "meal"),
-    ("오송역 주변 맛집", "meal"),
-    ("오송역 KTX 맛집", "meal"),
-    ("KTX 오송역 맛집", "meal"),
-    ("KTX 오송역 밥집", "meal"),
-    ("KTX 오송역 점심", "meal"),
-    ("KTX 오송역 저녁", "meal"),
-    ("KTX 오송역 근처 맛집", "meal"),
-    ("KTX 오송역 주변 맛집", "meal"),
-
-    # 음식점 - 오송역 한식 / 국밥 / 찌개
-    ("오송역 한식", "meal"),
-    ("오송역 백반", "meal"),
-    ("오송역 집밥", "meal"),
-    ("오송역 국밥", "meal"),
-    ("오송역 순대국밥", "meal"),
-    ("오송역 돼지국밥", "meal"),
-    ("오송역 해장국", "meal"),
-    ("오송역 김치찌개", "meal"),
-    ("오송역 된장찌개", "meal"),
-    ("오송역 부대찌개", "meal"),
-    ("오송역 제육", "meal"),
-    ("오송역 덮밥", "meal"),
-    ("오송역 갈비탕", "meal"),
-    ("오송역 곰탕", "meal"),
-    ("오송역 설렁탕", "meal"),
-
-    # 음식점 - 오송역 분식 / 간단식
-    ("오송역 분식", "meal"),
-    ("오송역 김밥", "meal"),
-    ("오송역 떡볶이", "meal"),
-    ("오송역 라면", "meal"),
-    ("오송역 돈까스", "meal"),
-    ("오송역 돈가스", "meal"),
-    ("오송역 샌드위치", "meal"),
-    ("오송역 샐러드", "meal"),
-    ("오송역 도시락", "meal"),
-
-    # 음식점 - 오송역 일식 / 초밥 / 라멘
-    ("오송역 일식", "meal"),
-    ("오송역 라멘", "meal"),
-    ("오송역 일본라멘", "meal"),
-    ("오송역 초밥", "meal"),
-    ("오송역 스시", "meal"),
-    ("오송역 카츠", "meal"),
-    ("오송역 규동", "meal"),
-    ("오송역 우동", "meal"),
-    ("오송역 소바", "meal"),
-
-    # 음식점 - 오송역 중식 / 마라탕
-    ("오송역 중식", "meal"),
-    ("오송역 중국집", "meal"),
-    ("오송역 짜장면", "meal"),
-    ("오송역 짬뽕", "meal"),
-    ("오송역 탕수육", "meal"),
-    ("오송역 마라탕", "meal"),
-    ("오송역 마라샹궈", "meal"),
-    ("오송역 양꼬치", "meal"),
-
-    # 음식점 - 오송역 양식 / 브런치 / 버거
-    ("오송역 양식", "meal"),
-    ("오송역 파스타", "meal"),
-    ("오송역 피자", "meal"),
-    ("오송역 리조또", "meal"),
-    ("오송역 브런치", "meal"),
-    ("오송역 햄버거", "meal"),
-    ("오송역 버거", "meal"),
-    ("오송역 스테이크", "meal"),
-
-    # 음식점 - 오송역 고기 / 치킨 / 회식
-    ("오송역 고기집", "meal"),
-    ("오송역 삼겹살", "meal"),
-    ("오송역 갈비", "meal"),
-    ("오송역 소고기", "meal"),
-    ("오송역 돼지고기", "meal"),
-    ("오송역 닭갈비", "meal"),
-    ("오송역 곱창", "meal"),
-    ("오송역 막창", "meal"),
-    ("오송역 치킨", "meal"),
-    ("오송역 족발", "meal"),
-    ("오송역 보쌈", "meal"),
-    ("오송역 회식", "meal"),
-
-    # 카페 - 오송역
-    ("오송역 카페", "cafe"),
-    ("오송역 디저트", "cafe"),
-    ("오송역 디저트 카페", "cafe"),
-    ("오송역 베이커리", "cafe"),
-    ("오송역 커피", "cafe"),
-    ("오송역 감성카페", "cafe"),
-    ("오송역 공부 카페", "cafe"),
-    ("오송역 케이크", "cafe"),
-    ("오송역 빵집", "cafe"),
-    ("오송역 베이글", "cafe"),
-    ("오송역 브런치 카페", "cafe"),
-    ("오송역 조용한 카페", "cafe"),
-    ("KTX 오송역 카페", "cafe"),
-    ("KTX 오송역 디저트", "cafe"),
-    ("KTX 오송역 베이커리", "cafe"),
-    ("KTX 오송역 커피", "cafe"),
-
-    # 놀거리 - 오송역
-    ("오송역 노래방", "activity"),
-    ("오송역 코인노래방", "activity"),
-    ("오송역 보드게임카페", "activity"),
-    ("오송역 PC방", "activity"),
-    ("오송역 피시방", "activity"),
-    ("오송역 볼링", "activity"),
-    ("오송역 방탈출", "activity"),
-    ("오송역 놀거리", "activity"),
-    ("오송역 술집", "activity"),
-    ("오송역 영화관", "activity"),
-    ("오송역 산책", "activity"),
-    ("오송역 사진", "activity"),
-    ("오송역 공원", "activity"),
-
-    # =========================
-    # 오송역 주변 지명 - 청주 오송
-    # =========================
-    ("청주 오송 맛집", "meal"),
-    ("청주 오송 밥집", "meal"),
-    ("청주 오송 점심", "meal"),
-    ("청주 오송 저녁", "meal"),
-    ("청주 오송 혼밥", "meal"),
-    ("청주 오송 가성비 맛집", "meal"),
-    ("청주 오송 한식", "meal"),
-    ("청주 오송 백반", "meal"),
-    ("청주 오송 국밥", "meal"),
-    ("청주 오송 순대국밥", "meal"),
-    ("청주 오송 해장국", "meal"),
-    ("청주 오송 김치찌개", "meal"),
-    ("청주 오송 된장찌개", "meal"),
-    ("청주 오송 부대찌개", "meal"),
-    ("청주 오송 제육", "meal"),
-    ("청주 오송 분식", "meal"),
-    ("청주 오송 김밥", "meal"),
-    ("청주 오송 떡볶이", "meal"),
-    ("청주 오송 돈까스", "meal"),
-    ("청주 오송 돈가스", "meal"),
-    ("청주 오송 라멘", "meal"),
-    ("청주 오송 일식", "meal"),
-    ("청주 오송 초밥", "meal"),
-    ("청주 오송 스시", "meal"),
-    ("청주 오송 중식", "meal"),
-    ("청주 오송 중국집", "meal"),
-    ("청주 오송 짜장면", "meal"),
-    ("청주 오송 짬뽕", "meal"),
-    ("청주 오송 마라탕", "meal"),
-    ("청주 오송 양식", "meal"),
-    ("청주 오송 파스타", "meal"),
-    ("청주 오송 피자", "meal"),
-    ("청주 오송 브런치", "meal"),
-    ("청주 오송 햄버거", "meal"),
-    ("청주 오송 고기집", "meal"),
-    ("청주 오송 삼겹살", "meal"),
-    ("청주 오송 갈비", "meal"),
-    ("청주 오송 치킨", "meal"),
-    ("청주 오송 족발", "meal"),
-    ("청주 오송 보쌈", "meal"),
-
-    ("청주 오송 카페", "cafe"),
-    ("청주 오송 디저트", "cafe"),
-    ("청주 오송 디저트 카페", "cafe"),
-    ("청주 오송 베이커리", "cafe"),
-    ("청주 오송 커피", "cafe"),
-    ("청주 오송 감성카페", "cafe"),
-    ("청주 오송 공부 카페", "cafe"),
-    ("청주 오송 케이크", "cafe"),
-    ("청주 오송 빵집", "cafe"),
-    ("청주 오송 브런치 카페", "cafe"),
-
-    ("청주 오송 노래방", "activity"),
-    ("청주 오송 코인노래방", "activity"),
-    ("청주 오송 보드게임카페", "activity"),
-    ("청주 오송 PC방", "activity"),
-    ("청주 오송 피시방", "activity"),
-    ("청주 오송 볼링", "activity"),
-    ("청주 오송 방탈출", "activity"),
-    ("청주 오송 놀거리", "activity"),
-    ("청주 오송 술집", "activity"),
-    ("청주 오송 영화관", "activity"),
-    ("청주 오송 산책", "activity"),
-    ("청주 오송 사진", "activity"),
-
-    # =========================
-    # 오송읍 기준
-    # =========================
-    ("오송읍 맛집", "meal"),
-    ("오송읍 밥집", "meal"),
-    ("오송읍 점심", "meal"),
-    ("오송읍 저녁", "meal"),
-    ("오송읍 혼밥", "meal"),
-    ("오송읍 가성비 맛집", "meal"),
-    ("오송읍 한식", "meal"),
-    ("오송읍 백반", "meal"),
-    ("오송읍 국밥", "meal"),
-    ("오송읍 순대국밥", "meal"),
-    ("오송읍 해장국", "meal"),
-    ("오송읍 김치찌개", "meal"),
-    ("오송읍 부대찌개", "meal"),
-    ("오송읍 제육", "meal"),
-    ("오송읍 분식", "meal"),
-    ("오송읍 돈까스", "meal"),
-    ("오송읍 돈가스", "meal"),
-    ("오송읍 라멘", "meal"),
-    ("오송읍 일식", "meal"),
-    ("오송읍 초밥", "meal"),
-    ("오송읍 중식", "meal"),
-    ("오송읍 중국집", "meal"),
-    ("오송읍 마라탕", "meal"),
-    ("오송읍 양식", "meal"),
-    ("오송읍 파스타", "meal"),
-    ("오송읍 피자", "meal"),
-    ("오송읍 브런치", "meal"),
-    ("오송읍 고기집", "meal"),
-    ("오송읍 삼겹살", "meal"),
-    ("오송읍 치킨", "meal"),
-    ("오송읍 족발", "meal"),
-
-    ("오송읍 카페", "cafe"),
-    ("오송읍 디저트", "cafe"),
-    ("오송읍 디저트 카페", "cafe"),
-    ("오송읍 베이커리", "cafe"),
-    ("오송읍 커피", "cafe"),
-    ("오송읍 감성카페", "cafe"),
-    ("오송읍 공부 카페", "cafe"),
-    ("오송읍 케이크", "cafe"),
-    ("오송읍 빵집", "cafe"),
-
-    ("오송읍 노래방", "activity"),
-    ("오송읍 코인노래방", "activity"),
-    ("오송읍 보드게임카페", "activity"),
-    ("오송읍 PC방", "activity"),
-    ("오송읍 피시방", "activity"),
-    ("오송읍 볼링", "activity"),
-    ("오송읍 방탈출", "activity"),
-    ("오송읍 놀거리", "activity"),
-    ("오송읍 술집", "activity"),
-    ("오송읍 산책", "activity"),
-    ("오송읍 사진", "activity"),
-
-    # =========================
-    # 오송생명과학단지 / 오송바이오폴리스 / 산업단지 주변
-    # =========================
-    ("오송생명과학단지 맛집", "meal"),
-    ("오송생명과학단지 밥집", "meal"),
-    ("오송생명과학단지 점심", "meal"),
-    ("오송생명과학단지 저녁", "meal"),
-    ("오송생명과학단지 한식", "meal"),
-    ("오송생명과학단지 국밥", "meal"),
-    ("오송생명과학단지 분식", "meal"),
-    ("오송생명과학단지 돈까스", "meal"),
-    ("오송생명과학단지 중식", "meal"),
-    ("오송생명과학단지 마라탕", "meal"),
-    ("오송생명과학단지 파스타", "meal"),
-    ("오송생명과학단지 고기집", "meal"),
-    ("오송생명과학단지 삼겹살", "meal"),
-    ("오송생명과학단지 치킨", "meal"),
-
-    ("오송생명과학단지 카페", "cafe"),
-    ("오송생명과학단지 디저트", "cafe"),
-    ("오송생명과학단지 베이커리", "cafe"),
-    ("오송생명과학단지 커피", "cafe"),
-    ("오송생명과학단지 감성카페", "cafe"),
-
-    ("오송생명과학단지 노래방", "activity"),
-    ("오송생명과학단지 PC방", "activity"),
-    ("오송생명과학단지 놀거리", "activity"),
-    ("오송생명과학단지 술집", "activity"),
-
-    ("오송바이오폴리스 맛집", "meal"),
-    ("오송바이오폴리스 밥집", "meal"),
-    ("오송바이오폴리스 점심", "meal"),
-    ("오송바이오폴리스 저녁", "meal"),
-    ("오송바이오폴리스 한식", "meal"),
-    ("오송바이오폴리스 국밥", "meal"),
-    ("오송바이오폴리스 돈까스", "meal"),
-    ("오송바이오폴리스 중식", "meal"),
-    ("오송바이오폴리스 마라탕", "meal"),
-    ("오송바이오폴리스 파스타", "meal"),
-    ("오송바이오폴리스 고기집", "meal"),
-
-    ("오송바이오폴리스 카페", "cafe"),
-    ("오송바이오폴리스 디저트", "cafe"),
-    ("오송바이오폴리스 베이커리", "cafe"),
-    ("오송바이오폴리스 커피", "cafe"),
-
-    ("오송바이오폴리스 노래방", "activity"),
-    ("오송바이오폴리스 PC방", "activity"),
-    ("오송바이오폴리스 놀거리", "activity"),
-
-    # =========================
-    # 오송 호수공원 / 산책 / 카페
-    # =========================
-    ("오송 호수공원 맛집", "meal"),
-    ("오송 호수공원 밥집", "meal"),
-    ("오송 호수공원 카페", "cafe"),
-    ("오송 호수공원 디저트", "cafe"),
-    ("오송 호수공원 베이커리", "cafe"),
-    ("오송 호수공원 커피", "cafe"),
-    ("오송 호수공원 감성카페", "cafe"),
-    ("오송 호수공원 산책", "activity"),
-    ("오송 호수공원 공원", "activity"),
-    ("오송 호수공원 사진", "activity"),
-    ("오송 호수공원 놀거리", "activity"),
-
-    ("오송호수공원 맛집", "meal"),
-    ("오송호수공원 밥집", "meal"),
-    ("오송호수공원 카페", "cafe"),
-    ("오송호수공원 디저트", "cafe"),
-    ("오송호수공원 베이커리", "cafe"),
-    ("오송호수공원 산책", "activity"),
-    ("오송호수공원 사진", "activity"),
-
-    # =========================
-    # 오송 주변 확장 지명 - 봉산리 / 만수리 / 연제리 / 궁평리
-    # =========================
-    ("오송 봉산리 맛집", "meal"),
-    ("오송 봉산리 밥집", "meal"),
-    ("오송 봉산리 카페", "cafe"),
-    ("오송 봉산리 디저트", "cafe"),
-    ("오송 봉산리 노래방", "activity"),
-    ("오송 봉산리 PC방", "activity"),
-
-    ("오송 만수리 맛집", "meal"),
-    ("오송 만수리 밥집", "meal"),
-    ("오송 만수리 카페", "cafe"),
-    ("오송 만수리 디저트", "cafe"),
-    ("오송 만수리 노래방", "activity"),
-    ("오송 만수리 PC방", "activity"),
-
-    ("오송 연제리 맛집", "meal"),
-    ("오송 연제리 밥집", "meal"),
-    ("오송 연제리 카페", "cafe"),
-    ("오송 연제리 디저트", "cafe"),
-    ("오송 연제리 노래방", "activity"),
-    ("오송 연제리 PC방", "activity"),
-
-    ("오송 궁평리 맛집", "meal"),
-    ("오송 궁평리 밥집", "meal"),
-    ("오송 궁평리 카페", "cafe"),
-    ("오송 궁평리 디저트", "cafe"),
-    ("오송 궁평리 산책", "activity"),
-
-    # =========================
-    # 오송 근처 확장 - 강내면 / 미호강 주변
-    # =========================
-    ("청주 강내면 맛집", "meal"),
-    ("청주 강내면 밥집", "meal"),
-    ("청주 강내면 점심", "meal"),
-    ("청주 강내면 저녁", "meal"),
-    ("청주 강내면 한식", "meal"),
-    ("청주 강내면 국밥", "meal"),
-    ("청주 강내면 돈까스", "meal"),
-    ("청주 강내면 고기집", "meal"),
-    ("청주 강내면 카페", "cafe"),
-    ("청주 강내면 디저트", "cafe"),
-    ("청주 강내면 베이커리", "cafe"),
-    ("청주 강내면 노래방", "activity"),
-    ("청주 강내면 PC방", "activity"),
-    ("청주 강내면 산책", "activity"),
-
-    ("미호강 맛집", "meal"),
-    ("미호강 카페", "cafe"),
-    ("미호강 산책", "activity"),
-    ("미호강 공원", "activity"),
-    ("미호강 사진", "activity"),
-
-        # =========================
-    # 출발지: 동남지구 기준
-    # =========================
-
-    # 음식점 - 동남지구 기본
-    ("청주 동남지구 맛집", "meal"),
-    ("청주 동남지구 밥집", "meal"),
-    ("청주 동남지구 점심", "meal"),
-    ("청주 동남지구 저녁", "meal"),
-    ("청주 동남지구 혼밥", "meal"),
-    ("청주 동남지구 가성비 맛집", "meal"),
-    ("청주 동남지구 근처 맛집", "meal"),
-    ("청주 동남지구 주변 맛집", "meal"),
-    ("동남지구 맛집", "meal"),
-    ("동남지구 밥집", "meal"),
-    ("동남지구 점심", "meal"),
-    ("동남지구 저녁", "meal"),
-    ("동남지구 혼밥", "meal"),
-    ("동남지구 가성비 맛집", "meal"),
-
-    # 음식점 - 동남지구 한식 / 국밥 / 찌개
-    ("청주 동남지구 한식", "meal"),
-    ("청주 동남지구 백반", "meal"),
-    ("청주 동남지구 집밥", "meal"),
-    ("청주 동남지구 국밥", "meal"),
-    ("청주 동남지구 순대국밥", "meal"),
-    ("청주 동남지구 돼지국밥", "meal"),
-    ("청주 동남지구 해장국", "meal"),
-    ("청주 동남지구 김치찌개", "meal"),
-    ("청주 동남지구 된장찌개", "meal"),
-    ("청주 동남지구 부대찌개", "meal"),
-    ("청주 동남지구 제육", "meal"),
-    ("청주 동남지구 덮밥", "meal"),
-    ("청주 동남지구 갈비탕", "meal"),
-    ("청주 동남지구 곰탕", "meal"),
-    ("청주 동남지구 설렁탕", "meal"),
-    ("동남지구 한식", "meal"),
-    ("동남지구 백반", "meal"),
-    ("동남지구 국밥", "meal"),
-    ("동남지구 해장국", "meal"),
-    ("동남지구 김치찌개", "meal"),
-    ("동남지구 제육", "meal"),
-
-    # 음식점 - 동남지구 분식 / 간단식
-    ("청주 동남지구 분식", "meal"),
-    ("청주 동남지구 김밥", "meal"),
-    ("청주 동남지구 떡볶이", "meal"),
-    ("청주 동남지구 라면", "meal"),
-    ("청주 동남지구 돈까스", "meal"),
-    ("청주 동남지구 돈가스", "meal"),
-    ("청주 동남지구 샌드위치", "meal"),
-    ("청주 동남지구 샐러드", "meal"),
-    ("청주 동남지구 도시락", "meal"),
-    ("동남지구 분식", "meal"),
-    ("동남지구 김밥", "meal"),
-    ("동남지구 떡볶이", "meal"),
-    ("동남지구 돈까스", "meal"),
-
-    # 음식점 - 동남지구 일식 / 초밥 / 라멘
-    ("청주 동남지구 일식", "meal"),
-    ("청주 동남지구 라멘", "meal"),
-    ("청주 동남지구 일본라멘", "meal"),
-    ("청주 동남지구 초밥", "meal"),
-    ("청주 동남지구 스시", "meal"),
-    ("청주 동남지구 카츠", "meal"),
-    ("청주 동남지구 규동", "meal"),
-    ("청주 동남지구 우동", "meal"),
-    ("청주 동남지구 소바", "meal"),
-    ("동남지구 일식", "meal"),
-    ("동남지구 라멘", "meal"),
-    ("동남지구 초밥", "meal"),
-    ("동남지구 스시", "meal"),
-
-    # 음식점 - 동남지구 중식 / 마라탕
-    ("청주 동남지구 중식", "meal"),
-    ("청주 동남지구 중국집", "meal"),
-    ("청주 동남지구 짜장면", "meal"),
-    ("청주 동남지구 짬뽕", "meal"),
-    ("청주 동남지구 탕수육", "meal"),
-    ("청주 동남지구 마라탕", "meal"),
-    ("청주 동남지구 마라샹궈", "meal"),
-    ("청주 동남지구 양꼬치", "meal"),
-    ("동남지구 중식", "meal"),
-    ("동남지구 중국집", "meal"),
-    ("동남지구 짜장면", "meal"),
-    ("동남지구 짬뽕", "meal"),
-    ("동남지구 마라탕", "meal"),
-
-    # 음식점 - 동남지구 양식 / 브런치 / 버거
-    ("청주 동남지구 양식", "meal"),
-    ("청주 동남지구 파스타", "meal"),
-    ("청주 동남지구 피자", "meal"),
-    ("청주 동남지구 리조또", "meal"),
-    ("청주 동남지구 브런치", "meal"),
-    ("청주 동남지구 햄버거", "meal"),
-    ("청주 동남지구 버거", "meal"),
-    ("청주 동남지구 스테이크", "meal"),
-    ("동남지구 양식", "meal"),
-    ("동남지구 파스타", "meal"),
-    ("동남지구 피자", "meal"),
-    ("동남지구 브런치", "meal"),
-    ("동남지구 햄버거", "meal"),
-
-    # 음식점 - 동남지구 고기 / 치킨 / 회식
-    ("청주 동남지구 고기집", "meal"),
-    ("청주 동남지구 삼겹살", "meal"),
-    ("청주 동남지구 갈비", "meal"),
-    ("청주 동남지구 소고기", "meal"),
-    ("청주 동남지구 돼지고기", "meal"),
-    ("청주 동남지구 닭갈비", "meal"),
-    ("청주 동남지구 곱창", "meal"),
-    ("청주 동남지구 막창", "meal"),
-    ("청주 동남지구 치킨", "meal"),
-    ("청주 동남지구 족발", "meal"),
-    ("청주 동남지구 보쌈", "meal"),
-    ("청주 동남지구 회식", "meal"),
-    ("동남지구 고기집", "meal"),
-    ("동남지구 삼겹살", "meal"),
-    ("동남지구 갈비", "meal"),
-    ("동남지구 치킨", "meal"),
-    ("동남지구 족발", "meal"),
-
-    # 카페 - 동남지구
-    ("청주 동남지구 카페", "cafe"),
-    ("청주 동남지구 디저트", "cafe"),
-    ("청주 동남지구 디저트 카페", "cafe"),
-    ("청주 동남지구 베이커리", "cafe"),
-    ("청주 동남지구 커피", "cafe"),
-    ("청주 동남지구 감성카페", "cafe"),
-    ("청주 동남지구 공부 카페", "cafe"),
-    ("청주 동남지구 케이크", "cafe"),
-    ("청주 동남지구 빵집", "cafe"),
-    ("청주 동남지구 베이글", "cafe"),
-    ("청주 동남지구 브런치 카페", "cafe"),
-    ("청주 동남지구 조용한 카페", "cafe"),
-    ("동남지구 카페", "cafe"),
-    ("동남지구 디저트", "cafe"),
-    ("동남지구 디저트 카페", "cafe"),
-    ("동남지구 베이커리", "cafe"),
-    ("동남지구 커피", "cafe"),
-    ("동남지구 감성카페", "cafe"),
-    ("동남지구 공부 카페", "cafe"),
-    ("동남지구 케이크", "cafe"),
-    ("동남지구 빵집", "cafe"),
-
-    # 놀거리 - 동남지구
-    ("청주 동남지구 노래방", "activity"),
-    ("청주 동남지구 코인노래방", "activity"),
-    ("청주 동남지구 보드게임카페", "activity"),
-    ("청주 동남지구 PC방", "activity"),
-    ("청주 동남지구 피시방", "activity"),
-    ("청주 동남지구 볼링", "activity"),
-    ("청주 동남지구 방탈출", "activity"),
-    ("청주 동남지구 놀거리", "activity"),
-    ("청주 동남지구 술집", "activity"),
-    ("청주 동남지구 산책", "activity"),
-    ("청주 동남지구 영화관", "activity"),
-    ("청주 동남지구 사진", "activity"),
-    ("청주 동남지구 공원", "activity"),
-    ("동남지구 노래방", "activity"),
-    ("동남지구 코인노래방", "activity"),
-    ("동남지구 보드게임카페", "activity"),
-    ("동남지구 PC방", "activity"),
-    ("동남지구 피시방", "activity"),
-    ("동남지구 볼링", "activity"),
-    ("동남지구 방탈출", "activity"),
-    ("동남지구 놀거리", "activity"),
-    ("동남지구 술집", "activity"),
-    ("동남지구 산책", "activity"),
-    ("동남지구 영화관", "activity"),
-    ("동남지구 사진", "activity"),
-
-    # =========================
-    # 동남지구 주변 지명 - 용암동
-    # =========================
-    ("청주 용암동 맛집", "meal"),
-    ("청주 용암동 밥집", "meal"),
-    ("청주 용암동 점심", "meal"),
-    ("청주 용암동 저녁", "meal"),
-    ("청주 용암동 혼밥", "meal"),
-    ("청주 용암동 가성비 맛집", "meal"),
-    ("청주 용암동 한식", "meal"),
-    ("청주 용암동 백반", "meal"),
-    ("청주 용암동 국밥", "meal"),
-    ("청주 용암동 순대국밥", "meal"),
-    ("청주 용암동 해장국", "meal"),
-    ("청주 용암동 김치찌개", "meal"),
-    ("청주 용암동 부대찌개", "meal"),
-    ("청주 용암동 제육", "meal"),
-    ("청주 용암동 분식", "meal"),
-    ("청주 용암동 김밥", "meal"),
-    ("청주 용암동 떡볶이", "meal"),
-    ("청주 용암동 돈까스", "meal"),
-    ("청주 용암동 라멘", "meal"),
-    ("청주 용암동 일식", "meal"),
-    ("청주 용암동 초밥", "meal"),
-    ("청주 용암동 스시", "meal"),
-    ("청주 용암동 중식", "meal"),
-    ("청주 용암동 중국집", "meal"),
-    ("청주 용암동 짜장면", "meal"),
-    ("청주 용암동 짬뽕", "meal"),
-    ("청주 용암동 마라탕", "meal"),
-    ("청주 용암동 양식", "meal"),
-    ("청주 용암동 파스타", "meal"),
-    ("청주 용암동 피자", "meal"),
-    ("청주 용암동 브런치", "meal"),
-    ("청주 용암동 고기집", "meal"),
-    ("청주 용암동 삼겹살", "meal"),
-    ("청주 용암동 갈비", "meal"),
-    ("청주 용암동 치킨", "meal"),
-    ("청주 용암동 족발", "meal"),
-    ("청주 용암동 보쌈", "meal"),
-
-    ("청주 용암동 카페", "cafe"),
-    ("청주 용암동 디저트", "cafe"),
-    ("청주 용암동 디저트 카페", "cafe"),
-    ("청주 용암동 베이커리", "cafe"),
-    ("청주 용암동 커피", "cafe"),
-    ("청주 용암동 감성카페", "cafe"),
-    ("청주 용암동 공부 카페", "cafe"),
-    ("청주 용암동 케이크", "cafe"),
-    ("청주 용암동 빵집", "cafe"),
-
-    ("청주 용암동 노래방", "activity"),
-    ("청주 용암동 코인노래방", "activity"),
-    ("청주 용암동 보드게임카페", "activity"),
-    ("청주 용암동 PC방", "activity"),
-    ("청주 용암동 피시방", "activity"),
-    ("청주 용암동 볼링", "activity"),
-    ("청주 용암동 방탈출", "activity"),
-    ("청주 용암동 놀거리", "activity"),
-    ("청주 용암동 술집", "activity"),
-    ("청주 용암동 산책", "activity"),
-    ("청주 용암동 사진", "activity"),
-
-    # =========================
-    # 동남지구 주변 지명 - 방서동
-    # =========================
-    ("청주 방서동 맛집", "meal"),
-    ("청주 방서동 밥집", "meal"),
-    ("청주 방서동 점심", "meal"),
-    ("청주 방서동 저녁", "meal"),
-    ("청주 방서동 혼밥", "meal"),
-    ("청주 방서동 가성비 맛집", "meal"),
-    ("청주 방서동 한식", "meal"),
-    ("청주 방서동 백반", "meal"),
-    ("청주 방서동 국밥", "meal"),
-    ("청주 방서동 해장국", "meal"),
-    ("청주 방서동 김치찌개", "meal"),
-    ("청주 방서동 부대찌개", "meal"),
-    ("청주 방서동 제육", "meal"),
-    ("청주 방서동 분식", "meal"),
-    ("청주 방서동 돈까스", "meal"),
-    ("청주 방서동 일식", "meal"),
-    ("청주 방서동 초밥", "meal"),
-    ("청주 방서동 중식", "meal"),
-    ("청주 방서동 중국집", "meal"),
-    ("청주 방서동 마라탕", "meal"),
-    ("청주 방서동 양식", "meal"),
-    ("청주 방서동 파스타", "meal"),
-    ("청주 방서동 브런치", "meal"),
-    ("청주 방서동 고기집", "meal"),
-    ("청주 방서동 삼겹살", "meal"),
-    ("청주 방서동 치킨", "meal"),
-
-    ("청주 방서동 카페", "cafe"),
-    ("청주 방서동 디저트", "cafe"),
-    ("청주 방서동 디저트 카페", "cafe"),
-    ("청주 방서동 베이커리", "cafe"),
-    ("청주 방서동 커피", "cafe"),
-    ("청주 방서동 감성카페", "cafe"),
-    ("청주 방서동 공부 카페", "cafe"),
-    ("청주 방서동 케이크", "cafe"),
-
-    ("청주 방서동 노래방", "activity"),
-    ("청주 방서동 코인노래방", "activity"),
-    ("청주 방서동 보드게임카페", "activity"),
-    ("청주 방서동 PC방", "activity"),
-    ("청주 방서동 피시방", "activity"),
-    ("청주 방서동 볼링", "activity"),
-    ("청주 방서동 방탈출", "activity"),
-    ("청주 방서동 놀거리", "activity"),
-    ("청주 방서동 술집", "activity"),
-    ("청주 방서동 산책", "activity"),
-    ("청주 방서동 사진", "activity"),
-
-    # =========================
-    # 동남지구 주변 지명 - 용정동
-    # =========================
-    ("청주 용정동 맛집", "meal"),
-    ("청주 용정동 밥집", "meal"),
-    ("청주 용정동 점심", "meal"),
-    ("청주 용정동 저녁", "meal"),
-    ("청주 용정동 한식", "meal"),
-    ("청주 용정동 백반", "meal"),
-    ("청주 용정동 국밥", "meal"),
-    ("청주 용정동 해장국", "meal"),
-    ("청주 용정동 분식", "meal"),
-    ("청주 용정동 돈까스", "meal"),
-    ("청주 용정동 일식", "meal"),
-    ("청주 용정동 초밥", "meal"),
-    ("청주 용정동 중식", "meal"),
-    ("청주 용정동 마라탕", "meal"),
-    ("청주 용정동 파스타", "meal"),
-    ("청주 용정동 고기집", "meal"),
-    ("청주 용정동 삼겹살", "meal"),
-    ("청주 용정동 치킨", "meal"),
-
-    ("청주 용정동 카페", "cafe"),
-    ("청주 용정동 디저트", "cafe"),
-    ("청주 용정동 베이커리", "cafe"),
-    ("청주 용정동 커피", "cafe"),
-    ("청주 용정동 감성카페", "cafe"),
-
-    ("청주 용정동 노래방", "activity"),
-    ("청주 용정동 코인노래방", "activity"),
-    ("청주 용정동 보드게임카페", "activity"),
-    ("청주 용정동 PC방", "activity"),
-    ("청주 용정동 놀거리", "activity"),
-    ("청주 용정동 술집", "activity"),
-    ("청주 용정동 산책", "activity"),
-
-    # =========================
-    # 동남지구 주변 확장 - 운동동 / 월오동 / 낙가동
-    # =========================
-    ("청주 운동동 맛집", "meal"),
-    ("청주 운동동 밥집", "meal"),
-    ("청주 운동동 한식", "meal"),
-    ("청주 운동동 국밥", "meal"),
-    ("청주 운동동 고기집", "meal"),
-    ("청주 운동동 카페", "cafe"),
-    ("청주 운동동 디저트", "cafe"),
-    ("청주 운동동 산책", "activity"),
-    ("청주 운동동 놀거리", "activity"),
-
-    ("청주 월오동 맛집", "meal"),
-    ("청주 월오동 밥집", "meal"),
-    ("청주 월오동 한식", "meal"),
-    ("청주 월오동 카페", "cafe"),
-    ("청주 월오동 디저트", "cafe"),
-    ("청주 월오동 산책", "activity"),
-    ("청주 월오동 공원", "activity"),
-
-    ("청주 낙가동 맛집", "meal"),
-    ("청주 낙가동 밥집", "meal"),
-    ("청주 낙가동 카페", "cafe"),
-    ("청주 낙가동 디저트", "cafe"),
-    ("청주 낙가동 산책", "activity"),
-    ("청주 낙가동 놀거리", "activity"),
-
-    # =========================
-    # 동남지구 근처 공원 / 산책 / 사진
-    # =========================
-    ("동남지구 공원", "activity"),
-    ("동남지구 산책로", "activity"),
-    ("동남지구 사진", "activity"),
-    ("동남지구 데이트", "activity"),
-    ("청주 동남지구 공원", "activity"),
-    ("청주 동남지구 산책로", "activity"),
-    ("청주 동남지구 데이트", "activity"),
-    ("청주 동남지구 사진", "activity"),
-    ("용암동 공원", "activity"),
-    ("용암동 산책", "activity"),
-    ("용암동 사진", "activity"),
-    ("방서동 공원", "activity"),
-    ("방서동 산책", "activity"),
-    ("방서동 사진", "activity"),
-
-    # =========================
-    # 숙소
-    # =========================
-    ("청주 호텔", "lodging"),
-    ("청주 숙소", "lodging"),
-    ("청주 게스트하우스", "lodging"),
-    ("청주 모텔", "lodging"),
-    ("청주 비즈니스 호텔", "lodging"),
-
-    ("충북대 숙소", "lodging"),
-    ("충북대 호텔", "lodging"),
-    ("청주 충북대 모텔", "lodging"),
-
-    ("청주고속버스터미널 호텔", "lodging"),
-    ("청주고속버스터미널 숙소", "lodging"),
-    ("청주 터미널 호텔", "lodging"),
-    ("청주 가경동 호텔", "lodging"),
-
-    ("오송역 호텔", "lodging"),
-    ("오송역 숙소", "lodging"),
-    ("오송 호텔", "lodging"),
-    ("오송 숙소", "lodging"),
-
-    ("청주 동남지구 호텔", "lodging"),
-    ("청주 동남지구 숙소", "lodging"),
-    ("청주 용암동 호텔", "lodging"),
-    ("청주 용암동 숙소", "lodging"),
+    (str(item["query"]), str(item["role"]))
+    for item in load_json_file(KAKAO_KEYWORDS_PATH)
 ]
 
-START_POINTS = {
-    "청주고속버스터미널": {"lat": 36.6260, "lng": 127.4317},
-    "동남지구": {"lat": 36.6175, "lng": 127.5150},
-    "충북대": {"lat": 36.6283, "lng": 127.4565},
-    "오송역": {"lat": 36.6200, "lng": 127.3275},
-}
-
-STYLE_KEYWORDS = {
-    "카페": ["카페", "커피", "디저트", "감성"],
-    "맛집": ["맛집", "밥", "식사", "먹거리", "시장", "로컬"],
-    "동물": ["동물", "반려견", "강아지", "고양이", "애견", "펫", "동물원"],
-    "동물먹이": ["먹이", "먹여", "먹이주", "사료", "동물 먹"],
-    "놀거리": ["놀거리", "노래방", "노래연습장", "노래연습실", "노래궁", "보드게임", "볼링", "방탈출", "오락", "게임"],
-    "노래방": ["노래방", "노래연습장", "노래연습실", "노래궁", "코인노래"],
-    "PC방": ["PC방", "피시방", "pc방", "게임방"],
-    "보드게임": ["보드게임", "보드게임카페"],
-    "산책": ["산책", "걷", "걷기", "느긋", "힐링"],
-    "사진": ["사진", "포토", "인생샷", "야경", "감성"],
-    "역사": ["역사", "박물관", "전시", "직지", "문화"],
-    "실내": ["실내", "비", "전시", "박물관"],
-    "실외": ["실외", "야외", "밖", "공원"],
-    "자연": ["자연", "공원", "호수", "산성", "벚꽃"],
-    "쇼핑": ["쇼핑", "상권", "거리"],
-}
-SELECTABLE_KEYWORDS = {"맛집", "카페", "사진", "산책", "노래방", "PC방", "보드게임", "동물", "실내", "실외"}
-
-TRANSPORT_SPEED_KMH = {
-    "도보 중심": 4,
-    "대중교통": 18,
-}
-ALLOWED_TRANSPORTS = {"대중교통", "도보 중심"}
-ALLOWED_DURATIONS = {"당일치기"}
+START_POINTS = APP_CONFIG["start_points"]
+STYLE_KEYWORDS = APP_CONFIG["style_keywords"]
+SELECTABLE_KEYWORDS = set(APP_CONFIG["selectable_keywords"])
+TRANSPORT_SPEED_KMH = APP_CONFIG["transport_speed_kmh"]
+ALLOWED_TRANSPORTS = set(APP_CONFIG["allowed_transports"])
+ALLOWED_DURATIONS = set(APP_CONFIG["allowed_durations"])
 
 WALK_ONLY_MAX_MINUTES = 15
 WALK_ONLY_MAX_KM = TRANSPORT_SPEED_KMH["도보 중심"] * WALK_ONLY_MAX_MINUTES / 60
 
-CHEONGJU_LAT_RANGE = (36.40, 36.75)
-CHEONGJU_LNG_RANGE = (127.25, 127.65)
+CHEONGJU_LAT_RANGE = tuple(APP_CONFIG["cheongju_lat_range"])
+CHEONGJU_LNG_RANGE = tuple(APP_CONFIG["cheongju_lng_range"])
 
 
-LOCAL_FALLBACK_PLACES = [
-    {
-        "name": "청주동물원",
-        "category": "관광지",
-        "role": "activity",
-        "lat": 36.6499,
-        "lng": 127.5136,
-        "tags": ["동물", "사진", "산책", "자연"],
-        "score": 4.45,
-        "cost": 1000,
-        "indoor": False,
-        "stay_minutes": 90,
-        "source": "로컬 보강 DB",
-        "address": "충북 청주시 상당구 명암로 171",
-    },
-    {
-        "name": "문암생태공원 반려견 놀이터",
-        "category": "공원",
-        "role": "walk",
-        "lat": 36.6764,
-        "lng": 127.4473,
-        "tags": ["동물", "반려견", "산책", "자연", "사진"],
-        "score": 4.35,
-        "cost": 0,
-        "indoor": False,
-        "stay_minutes": 70,
-        "source": "로컬 보강 DB",
-        "address": "충북 청주시 흥덕구 무심서로 1097",
-    },
-    {
-        "name": "멘야마쯔리 충북대점",
-        "category": "맛집",
-        "role": "meal",
-        "lat": 36.6328,
-        "lng": 127.4545,
-        "tags": ["맛집", "식사", "라멘", "일식", "실내"],
-        "score": 4.0,
-        "cost": 12000,
-        "indoor": True,
-        "stay_minutes": 60,
-        "source": "로컬 보강 DB",
-        "address": "충북 청주시 흥덕구 내수동로 63",
-    },
-    {
-        "name": "스타벅스 충북대점",
-        "category": "카페",
-        "role": "cafe",
-        "lat": 36.6326,
-        "lng": 127.4564,
-        "tags": ["카페", "커피", "디저트", "사진", "실내"],
-        "score": 4.45,
-        "cost": 7000,
-        "indoor": True,
-        "stay_minutes": 50,
-        "source": "로컬 보강 DB",
-        "address": "충북 청주시 서원구 1순환로 682",
-    },
-    {
-        "name": "히어로보드게임카페 충북대점",
-        "category": "놀거리",
-        "role": "activity",
-        "lat": 36.6321,
-        "lng": 127.4572,
-        "tags": ["보드게임", "놀거리", "카페", "실내", "사진"],
-        "score": 4.5,
-        "cost": 12000,
-        "indoor": True,
-        "stay_minutes": 80,
-        "source": "로컬 보강 DB",
-        "address": "충북 청주시 서원구 1순환로672번길 63",
-    },
-    {
-        "name": "락휴코인노래연습장 충북대점",
-        "category": "놀거리",
-        "role": "activity",
-        "lat": 36.6323,
-        "lng": 127.4560,
-        "tags": ["노래방", "코인노래방", "놀거리", "실내"],
-        "score": 4.35,
-        "cost": 10000,
-        "indoor": True,
-        "stay_minutes": 60,
-        "source": "로컬 보강 DB",
-        "address": "충북 청주시 서원구 사창동",
-    },
-    {
-        "name": "메가박스 충북대",
-        "category": "놀거리",
-        "role": "activity",
-        "lat": 36.6318,
-        "lng": 127.4586,
-        "tags": ["영화관", "놀거리", "실내", "사진"],
-        "score": 4.4,
-        "cost": 15000,
-        "indoor": True,
-        "stay_minutes": 120,
-        "source": "로컬 보강 DB",
-        "address": "충북 청주시 서원구 사창동",
-    },
-    {
-        "name": "보드게임카페 레드버튼 청주터미널점",
-        "category": "놀거리",
-        "role": "activity",
-        "lat": 36.6265,
-        "lng": 127.4330,
-        "tags": ["보드게임", "놀거리", "카페", "실내", "사진"],
-        "score": 4.45,
-        "cost": 12000,
-        "indoor": True,
-        "stay_minutes": 80,
-        "source": "로컬 보강 DB",
-        "address": "충북 청주시 흥덕구 가경동",
-    },
-]
-LOW_PRIORITY_REPEATED_CAFE_NAMES = {"목욕탕 카페(카페목간)", "폴앤주비 카페"}
-OVERUSED_CHUNGBUK_PLACE_NAMES = {
-    "멘야마쯔리 충북대점",
-    "스타벅스 충북대점",
-    "히어로보드 게임카페 충북대점",
-    "메가박스 충북대",
-}
-BLOCKED_PLACE_NAMES = {
-    "청년문화창작소 느티",
-}
-LOW_CONFIDENCE_PLACE_NAMES = {"레인데이"}
-GENERIC_PLACE_NAMES = {
-    "성안길",
-    "수암골 카페거리",
-    "운리단길 카페거리",
-    "성안길 카페거리",
-    "육거리종합시장",
-    "서문시장 삼겹살거리",
-}
-GENERIC_PLACE_SUFFIXES = ("카페거리", "맛집거리", "삼겹살거리")
-ANIMAL_EVIDENCE_TERMS = ("동물", "동물원", "반려견", "애견", "펫", "강아지", "고양이", "멍", "댕")
-ACTIVITY_EVIDENCE_TERMS = (
-    "놀거리",
-    "노래방",
-    "노래연습장",
-    "노래연습실",
-    "노래궁",
-    "코인노래",
-    "볼링",
-    "보드게임",
-    "방탈출",
-    "영화관",
-    "메가박스",
-    "CGV",
-    "롯데시네마",
-    "VR",
-    "피시방",
-    "PC방",
-    "게임",
-)
+def load_places_cache_seed() -> list[dict[str, Any]]:
+    if not PLACE_DB_PATH.exists():
+        return []
+    payload = json.loads(PLACE_DB_PATH.read_text(encoding="utf-8"))
+    if isinstance(payload, list):
+        return payload
+    return payload.get("places", []) if isinstance(payload, dict) else []
+
+
+LOCAL_FALLBACK_PLACES = load_places_cache_seed()
+PLACE_FILTERS = APP_CONFIG["place_filters"]
+LOW_PRIORITY_REPEATED_CAFE_NAMES = set(PLACE_FILTERS["low_priority_repeated_cafe_names"])
+OVERUSED_CHUNGBUK_PLACE_NAMES = set(PLACE_FILTERS["overused_chungbuk_place_names"])
+BLOCKED_PLACE_NAMES = set(PLACE_FILTERS["blocked_place_names"])
+LOW_CONFIDENCE_PLACE_NAMES = set(PLACE_FILTERS["low_confidence_place_names"])
+GENERIC_PLACE_NAMES = set(PLACE_FILTERS["generic_place_names"])
+GENERIC_PLACE_SUFFIXES = tuple(PLACE_FILTERS["generic_place_suffixes"])
+EVIDENCE_TERMS = APP_CONFIG["evidence_terms"]
+ANIMAL_EVIDENCE_TERMS = EVIDENCE_TERMS["animal"]
+ACTIVITY_EVIDENCE_TERMS = EVIDENCE_TERMS["activity"]
 MIN_RECOMMENDATION_QUALITY = 3.0
-CAFE_EVIDENCE_TERMS = ("카페", "커피", "디저트", "베이커리", "스타벅스", "메가MGC", "메가커피", "투썸", "컴포즈", "빽다방", "이디야")
-MEAL_EVIDENCE_TERMS = (
-    "음식점",
-    "한식",
-    "일식",
-    "중식",
-    "양식",
-    "분식",
-    "식당",
-    "맛집",
-    "국밥",
-    "순대",
-    "돈까스",
-    "돈가스",
-    "버거",
-    "냉면",
-    "칼국수",
-    "만두",
-    "고기",
-    "갈비",
-    "치킨",
-    "피자",
-    "초밥",
-    "카츠",
-    "장어",
-)
+CAFE_EVIDENCE_TERMS = EVIDENCE_TERMS["cafe"]
+MEAL_EVIDENCE_TERMS = EVIDENCE_TERMS["meal"]
 
 
 def http_get(
@@ -1698,42 +378,21 @@ def infer_tags(category: str, name: str, address: str, description: str) -> list
 
 
 def place_role_for_category(category: str) -> str:
-    if category in {"맛집", "식당", "시장"}:
-        return "meal"
-    if category in {"카페", "카페거리"}:
-        return "cafe"
-    if category == "숙소":
-        return "lodging"
-    if category in {"동물체험", "놀거리"}:
-        return "activity"
-    if category in {"공원"}:
-        return "walk"
+    for role, categories in APP_CONFIG["role_category_map"].items():
+        if category in categories:
+            return role
     return "activity"
 
 
 def role_label(role: str) -> str:
-    return {
-        "meal": "밥집",
-        "cafe": "카페",
-        "activity": "놀거리",
-        "walk": "산책/마무리",
-        "lodging": "숙소",
-    }.get(role, "장소")
+    return APP_CONFIG["role_labels"].get(role, APP_CONFIG["role_labels"]["default"])
 
 
 def activity_signature(place: dict[str, Any]) -> str | None:
     haystack = f"{place.get('name', '')} {place.get('category', '')} {' '.join(place.get('tags', []))}"
-    checks = [
-        ("노래방", ["노래방", "노래연습장", "노래연습실", "코인노래"]),
-        ("PC방", ["PC방", "피시방", "게임방"]),
-        ("보드게임", ["보드게임"]),
-        ("영화관", ["영화관", "메가박스", "CGV", "롯데시네마"]),
-        ("볼링", ["볼링"]),
-        ("방탈출", ["방탈출"]),
-    ]
-    for signature, terms in checks:
-        if any(term in haystack for term in terms):
-            return signature
+    for rule in APP_CONFIG["activity_signatures"]:
+        if any(term in haystack for term in rule["terms"]):
+            return str(rule["signature"])
     if place.get("category") == "놀거리":
         return place.get("name")
     return None
@@ -1798,10 +457,7 @@ def is_low_confidence_place(
 
 def is_pet_care_place(place: dict[str, Any]) -> bool:
     haystack = f"{place['name']} {place.get('kakao_category', '')} {' '.join(place.get('tags', []))}"
-    return any(
-        word in haystack
-        for word in ["반려견", "애견", "펫", "강아지", "댕댕", "멍뭉", "퍼피", "유치원", "놀이터", "스테이", "호텔", "미용", "헬스멍"]
-    )
+    return any(word in haystack for word in APP_CONFIG["pet_care_terms"])
 
 
 def kakao_role_matches_query(role: str, name: str, kakao_category: str, query: str) -> bool:
@@ -1820,6 +476,9 @@ def kakao_role_matches_query(role: str, name: str, kakao_category: str, query: s
     return True
 
 
+SOURCE_BASE_QUALITY = APP_CONFIG["source_base_quality"]
+
+
 def place_quality_score(place: dict[str, Any]) -> float:
     name = str(place.get("name", "")).strip()
     address = str(place.get("address", "")).strip()
@@ -1836,9 +495,8 @@ def place_quality_score(place: dict[str, Any]) -> float:
     if is_low_confidence_place(name, source, role, category, tags, phone):
         return 0.0
 
-    score = 0.0
+    score = SOURCE_BASE_QUALITY.get(source, 1.0)
     if source == "카카오 Local API":
-        score += 2.0
         if url:
             score += 1.5
         if phone:
@@ -1847,22 +505,18 @@ def place_quality_score(place: dict[str, Any]) -> float:
             score += 1.0
         if kakao_category:
             score += 1.0
-        if role in {"meal", "cafe", "lodging"}:
+        if role in {"meal", "cafe"}:
             score += 0.7
         if role == "activity" and category in {"놀거리", "동물체험"}:
             score += 0.7
     elif source == "충청북도 관광명소정보 API":
-        score += 3.0
         if address and "일대" not in address:
             score += 0.8
         if category in {"박물관", "공원", "관광지", "동물체험", "놀거리"}:
             score += 0.7
     elif source == "로컬 보강 DB":
-        score += 3.5
         if address:
             score += 0.8
-    else:
-        score += 1.0
 
     if name in LOW_CONFIDENCE_PLACE_NAMES:
         score -= 10.0
@@ -1875,17 +529,13 @@ def estimate_kakao_cost(role: str, category: str, name: str, query: str, kakao_c
         return 12000
     if role == "cafe":
         return 7000
-    if role == "lodging":
-        return 40000
-    if any(word in haystack for word in ["동물", "반려견", "애견", "펫", "강아지", "고양이", "멍", "댕"]):
-        if "문암" in haystack and "놀이터" in haystack:
+    for rule in APP_CONFIG["kakao_cost_rules"]:
+        if not any(word in haystack for word in rule["terms"]):
+            continue
+        if rule.get("zero_if_all_terms") and all(term in haystack for term in rule["zero_if_all_terms"]):
             return 0
-        return 12000
-    if any(word in haystack for word in ["노래방", "코인노래", "볼링", "보드게임", "방탈출", "VR", "피시방", "PC방", "게임"]):
-        return 12000
-    if any(word in haystack for word in ["체험", "공방", "클래스"]):
-        return 15000
-    if category in {"카페거리", "상권", "시장"}:
+        return int(rule["cost"])
+    if category in APP_CONFIG["kakao_area_cost_categories"]:
         return 10000
     return 5000
 
@@ -1922,11 +572,6 @@ def normalize_kakao_place(item: dict[str, Any], query: str, role: str) -> dict[s
         category = "카페"
         tags = ["카페", "디저트", "사진"]
         stay_minutes = 50
-        indoor = True
-    elif role == "lodging":
-        category = "숙소"
-        tags = ["실내", "숙소", "교통"]
-        stay_minutes = 0
         indoor = True
     else:
         category = infer_category({"category": kakao_category}, name, address, query)
@@ -2043,8 +688,27 @@ def load_place_db() -> list[dict[str, Any]]:
         PLACE_DB_CACHE = sync_place_db()
         return PLACE_DB_CACHE
     payload = json.loads(PLACE_DB_PATH.read_text(encoding="utf-8"))
-    PLACE_DB_CACHE = sanitize_place_db(payload.get("places", []) + LOCAL_FALLBACK_PLACES)
+    places = payload if isinstance(payload, list) else payload.get("places", [])
+    source_counts = {} if isinstance(payload, list) else payload.get("source_counts", {})
+    has_synced_sources = bool(source_counts)
+    has_kakao_places = int(source_counts.get("카카오 Local API", 0) or 0) > 0
+    local_only_cache = len(places) <= len(LOCAL_FALLBACK_PLACES) and all(
+        str(place.get("source", "")) == "로컬 보강 DB" for place in places
+    )
+    if KAKAO_REST_API_KEY and (not has_synced_sources or local_only_cache or not has_kakao_places):
+        try:
+            PLACE_DB_CACHE = sync_place_db()
+            return PLACE_DB_CACHE
+        except (RuntimeError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, ET.ParseError, OSError) as error:
+            logger.warning("Place DB auto-sync failed, using cached places: %s", error)
+    PLACE_DB_CACHE = sanitize_place_db(places + LOCAL_FALLBACK_PLACES)
     return PLACE_DB_CACHE
+
+
+ROLE_DEFAULTS = {
+    role: (config["category"], config["tags"])
+    for role, config in APP_CONFIG["role_defaults"].items()
+}
 
 
 def sanitize_place_db(places: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2069,17 +733,11 @@ def sanitize_place_db(places: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         raw_category = place.get("kakao_category") if source == "카카오 Local API" else place.get("category", "")
         category = infer_category({"category": raw_category or ""}, name, address, search_query)
-        if original_role == "lodging" or category == "숙소":
-            continue
         if is_generic_area_place(name, address, category, source):
             continue
-        if original_role in {"meal", "cafe"}:
+        if original_role in ROLE_DEFAULTS:
             role = original_role
-            category = {"meal": "맛집", "cafe": "카페"}[role]
-            tags = {
-                "meal": ["맛집", "식사", "로컬"],
-                "cafe": ["카페", "디저트", "사진"],
-            }[role]
+            category, tags = ROLE_DEFAULTS[role]
         else:
             role = place_role_for_category(category)
             tags = infer_tags(category, name, address, "")
@@ -2102,7 +760,7 @@ def sanitize_place_db(places: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "tags": tags,
             "phone": phone,
             "cost": cost,
-            "indoor": bool(place.get("indoor")) or "실내" in tags or category in {"박물관", "카페거리", "카페", "맛집", "상권", "숙소", "놀거리"},
+            "indoor": bool(place.get("indoor")) or "실내" in tags or category in {"박물관", "카페거리", "카페", "맛집", "상권", "놀거리"},
             "map_url": map_url,
         }
         normalized_place["quality_score"] = place_quality_score(normalized_place)
@@ -2118,7 +776,6 @@ def sync_place_db() -> list[dict[str, Any]]:
     source_counts: dict[str, int] = {}
     fetchers = (
         ("충청북도 관광명소정보 API", fetch_chungbuk_places),
-        ("한국관광공사 TourAPI", fetch_tour_api_places),
         ("카카오 Local API", fetch_kakao_places),
     )
     for source, fetcher in fetchers:
@@ -2155,26 +812,6 @@ def fetch_chungbuk_places() -> list[dict[str, Any]]:
     return [place for item in items if (place := normalize_place(item, "충청북도 관광명소정보 API"))]
 
 
-def fetch_tour_api_places() -> list[dict[str, Any]]:
-    if not TOUR_API_KEY:
-        return []
-    params = {
-        "serviceKey": TOUR_API_KEY,
-        "MobileOS": "ETC",
-        "MobileApp": "CheongjuTripAgent",
-        "_type": "json",
-        "numOfRows": "100",
-        "pageNo": "1",
-        "areaCode": TOUR_API_AREA_CODE,
-        "sigunguCode": TOUR_API_SIGUNGU_CODE,
-        "arrange": "A",
-        "contentTypeId": "12",
-    }
-    raw = http_get(TOUR_API_BASE_URL, params)
-    items = deep_find_items(parse_api_payload(raw))
-    return [place for item in items if (place := normalize_place(item, "한국관광공사 TourAPI"))]
-
-
 def fetch_kakao_places() -> list[dict[str, Any]]:
     if not KAKAO_REST_API_KEY:
         return []
@@ -2184,8 +821,6 @@ def fetch_kakao_places() -> list[dict[str, Any]]:
     authorization = kakao_key if kakao_key.startswith("KakaoAK ") else f"KakaoAK {kakao_key}"
     headers = {"Authorization": authorization}
     for query, role in KAKAO_KEYWORD_SEARCHES:
-        if role == "lodging":
-            continue
         for page in range(1, 3):
             raw = http_get(
                 KAKAO_LOCAL_API_URL,
@@ -2290,7 +925,6 @@ def parse_odsay_path(path: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def odsay_transit_options(start: dict[str, float], end: dict[str, float]) -> tuple[list[dict[str, Any]], str | None]:
-    load_env_file()
     api_key = os.getenv("ODSAY_API_KEY") or os.getenv("ODSAY_KEY")
     if not api_key:
         return [], "ODSAY_API_KEY 없음"
@@ -2344,40 +978,6 @@ def odsay_transit_options(start: dict[str, float], end: dict[str, float]) -> tup
     return [], "ODsay 대중교통 경로 없음"
 
 
-ACCOMMODATION_DB = [
-    {
-        "name": "성안길 비즈니스 호텔",
-        "category": "숙소",
-        "lat": 36.6358,
-        "lng": 127.4888,
-        "tags": ["실내", "교통", "가성비", "중심가"],
-        "score": 4.3,
-        "cost": 30000,
-        "indoor": True,
-    },
-    {
-        "name": "충북대 인근 게스트하우스",
-        "category": "숙소",
-        "lat": 36.6292,
-        "lng": 127.4560,
-        "tags": ["실내", "가성비", "대중교통", "조용함"],
-        "score": 4.1,
-        "cost": 25000,
-        "indoor": True,
-    },
-    {
-        "name": "오송역 스테이",
-        "category": "숙소",
-        "lat": 36.6208,
-        "lng": 127.3290,
-        "tags": ["실내", "교통", "역세권"],
-        "score": 4.0,
-        "cost": 35000,
-        "indoor": True,
-    },
-]
-
-
 class AgentState(TypedDict):
     session_id: str
     start_name: str
@@ -2412,7 +1012,6 @@ class AgentGraphState(TypedDict, total=False):
     quality_route: str
     quality_reasons: list[str]
     tool_events: list[str]
-    accommodation: dict[str, Any] | None
     legs: list[dict[str, Any]]
     result: dict[str, Any]
 
@@ -2448,7 +1047,6 @@ class TripSummary(BaseModel):
     planner_mode: str
     intent: dict[str, Any] = Field(default_factory=dict)
     planner_decision_summary: str | None = None
-    lodging_cost: int = 0
     session_id: str
     memory_turns: int = 0
     rag_document_count: int = 0
@@ -2457,7 +1055,6 @@ class TripSummary(BaseModel):
 class TripPlan(BaseModel):
     summary: TripSummary
     schedule: list[dict[str, Any]]
-    accommodation: dict[str, Any] | None = None
     places: list[dict[str, Any]]
     legs: list[dict[str, Any]]
     warnings: list[str]
@@ -2467,7 +1064,14 @@ class TripPlan(BaseModel):
     middleware_decision: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class RoutePlannerDecision(BaseModel):
+    selected: list[dict[str, Any]] = Field(default_factory=list)
+    decision_summary: str = ""
+    rejected_notes: list[str] = Field(default_factory=list)
+
+
 INTENT_OUTPUT_PARSER = PydanticOutputParser(pydantic_object=TravelIntent) if PydanticOutputParser else None
+ROUTE_DECISION_OUTPUT_PARSER = PydanticOutputParser(pydantic_object=RoutePlannerDecision) if PydanticOutputParser else None
 TRIP_OUTPUT_PARSER = PydanticOutputParser(pydantic_object=TripPlan) if PydanticOutputParser else None
 GRAPH_MEMORY = MemorySaver() if MemorySaver else None
 SESSION_STORE: dict[str, list[dict[str, Any]]] = {}
@@ -2515,6 +1119,67 @@ def is_memory_excluded_place(place: dict[str, Any], excluded_name_keys: set[str]
 
 def model_provider():
     return get_model_provider()
+
+
+def place_to_document(place: dict[str, Any]) -> Any:
+    page_content = (
+        f"{place.get('name', '')}\n"
+        f"category={place.get('category', '')}; role={place.get('role', '')}; "
+        f"tags={', '.join(place.get('tags', []))}; "
+        f"address={place.get('address', '')}; phone={place.get('phone', '')}; "
+        f"source={place.get('source', '')}; score={place.get('score', '')}; "
+        f"quality_score={place.get('quality_score', '')}"
+    )
+    metadata = {
+        "name": place.get("name"),
+        "category": place.get("category"),
+        "role": place.get("role"),
+        "tags": ",".join(place.get("tags", [])),
+        "address": place.get("address"),
+        "source": place.get("source"),
+    }
+    if Document:
+        return Document(page_content=page_content, metadata=metadata)
+    return {"page_content": page_content, "metadata": metadata}
+
+
+def documents_to_context(documents: list[Any]) -> list[dict[str, Any]]:
+    contexts: list[dict[str, Any]] = []
+    for document in documents:
+        if Document and isinstance(document, Document):
+            contexts.append({"page_content": document.page_content, "metadata": document.metadata})
+        else:
+            contexts.append(
+                {
+                    "page_content": document.get("page_content", ""),
+                    "metadata": document.get("metadata", {}),
+                }
+            )
+    return contexts
+
+
+def keyword_retrieve(query: str, max_documents: int = 8) -> list[dict[str, Any]]:
+    terms = [term for term in query.replace(",", " ").split() if term]
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for place in load_place_db():
+        text = " ".join(
+            [
+                str(place.get("name", "")),
+                str(place.get("category", "")),
+                str(place.get("role", "")),
+                " ".join(place.get("tags", [])),
+                str(place.get("address", "")),
+            ]
+        )
+        score = sum(1 for term in terms if term in text)
+        if score:
+            scored.append((score, place))
+    scored.sort(key=lambda item: (item[0], float(item[1].get("score", 0) or 0)), reverse=True)
+    return documents_to_context([place_to_document(place) for _, place in scored[:max_documents]])
+
+
+def retrieve_relevant_place_documents(query: str, max_documents: int = 8) -> list[dict[str, Any]]:
+    return keyword_retrieve(query, max_documents=max_documents)
 
 
 def env_flag(name: str, default: bool = False) -> bool:
@@ -2631,10 +1296,7 @@ def validate_and_normalize(payload: dict[str, Any]) -> tuple[AgentState | None, 
 
     start_name = str(merged_payload.get("start_name", "")).strip()
     if start_name not in START_POINTS:
-        warnings.append(
-            "Fallback Middleware: 입력한 출발지를 찾을 수 없어 청주고속버스터미널로 계산했습니다."
-        )
-        start_name = "청주고속버스터미널"
+        return None, ["지원하지 않는 출발지입니다."]
 
     duration = str(merged_payload.get("duration", "당일치기")).strip()
     transport = str(merged_payload.get("transport", "대중교통")).strip()
@@ -2705,44 +1367,37 @@ def has_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(term in text for term in terms)
 
 
+INTENT_TERMS = APP_CONFIG["intent_terms"]
+
+
 def local_intent_analysis(style_text: str, selected_keywords: list[str] | None = None) -> tuple[list[str], dict[str, Any]]:
     selected_keywords = selected_keywords or []
     text = re.sub(r"\s+", " ", style_text).strip()
     tags = merge_tags(style_analysis_tool(text), selected_keywords)
 
-    needs_external_review = has_any(
-        text,
-        ("리뷰", "후기", "평점", "별점", "방문자", "인기", "핫플", "요즘", "최근", "최신", "유명", "입소문"),
-    )
-    needs_short_route = has_any(
-        text,
-        ("이동 거리 짧", "동선 짧", "가까운", "근처", "멀지 않", "짧게", "이동 적", "이동시간 짧"),
-    )
-    needs_quiet = has_any(text, ("조용", "한적", "사람 많", "붐비", "혼잡", "북적"))
-    wants_family = has_any(text, ("가족", "아이", "부모님", "어른", "어린이", "유아"))
-    wants_popular = has_any(text, ("인기", "핫플", "요즘", "유명", "입소문", "많이 가"))
+    flags = {key: has_any(text, terms) for key, terms in INTENT_TERMS.items()}
     prefer_tourism_over_food = (
         has_any(text, ("관광지 위주", "관광 중심", "볼거리 위주", "맛집보다 관광", "먹는 것보다 관광"))
         or ("맛집보다" in text and has_any(text, ("관광", "볼거리", "사진")))
     )
-    if needs_quiet:
+    if flags["needs_quiet"]:
         tags = merge_tags(tags, ["산책", "자연", "카페"])
-    if wants_family:
+    if flags["wants_family"]:
         tags = merge_tags(tags, ["산책", "자연", "카페", "사진"])
 
     must_have: list[str] = []
     avoid: list[str] = []
     if selected_keywords:
         must_have.extend(selected_keywords)
-    if needs_external_review:
+    if flags["needs_external_review"]:
         must_have.append("외부 리뷰 근거")
-    if needs_short_route:
+    if flags["needs_short_route"]:
         must_have.append("짧은 이동거리")
-    if wants_family:
+    if flags["wants_family"]:
         must_have.append("가족 적합")
-    if wants_popular:
+    if flags["wants_popular"]:
         must_have.append("인기/최신성")
-    if needs_quiet:
+    if flags["needs_quiet"]:
         must_have.append("조용한 장소")
         avoid.extend(["혼잡", "사람 많은 곳"])
     if prefer_tourism_over_food:
@@ -2750,7 +1405,7 @@ def local_intent_analysis(style_text: str, selected_keywords: list[str] | None =
         tags = merge_tags(["사진", "산책", "자연", "역사"], [tag for tag in tags if tag != "맛집"])
 
     tool_plan = ["자연어 의도 분석 Tool", "RAG 후보 검색 Tool"]
-    if needs_external_review:
+    if flags["needs_external_review"]:
         tool_plan.append("Tavily 리뷰 근거 검색 Tool")
     tool_plan.append("거리/동선 계산 Tool")
     tool_plan.append("최종 동선 추천")
@@ -2759,12 +1414,8 @@ def local_intent_analysis(style_text: str, selected_keywords: list[str] | None =
         "tags": tags,
         "must_have": list(dict.fromkeys(must_have)),
         "avoid": list(dict.fromkeys(avoid)),
-        "pace": "느긋" if needs_quiet or needs_short_route else "보통",
-        "needs_external_review": needs_external_review,
-        "needs_short_route": needs_short_route,
-        "needs_quiet": needs_quiet,
-        "wants_family": wants_family,
-        "wants_popular": wants_popular,
+        "pace": "느긋" if flags["needs_quiet"] or flags["needs_short_route"] else "보통",
+        **flags,
         "prefer_tourism_over_food": prefer_tourism_over_food,
         "tool_plan": tool_plan,
         "intent_summary": "자연어 요청을 로컬 규칙으로 분석하고 키워드는 보조 조건으로 병합했습니다.",
@@ -2811,29 +1462,6 @@ def merge_intent_with_local(
     return merged
 
 
-def extract_json_payload(text: str) -> dict[str, Any] | None:
-    stripped = text.strip()
-    if not stripped:
-        return None
-    if stripped.startswith("```"):
-        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
-        stripped = re.sub(r"\s*```$", "", stripped)
-    try:
-        payload = json.loads(stripped)
-        return payload if isinstance(payload, dict) else None
-    except json.JSONDecodeError:
-        pass
-
-    match = re.search(r"\{.*\}", stripped, re.DOTALL)
-    if not match:
-        return None
-    try:
-        payload = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
 def llm_intent_tool(state: AgentState) -> tuple[list[str], dict[str, Any], str]:
     fallback_tags, local_intent = local_intent_analysis(
         state["style_text"],
@@ -2857,28 +1485,25 @@ def llm_intent_tool(state: AgentState) -> tuple[list[str], dict[str, Any], str]:
             "\"tool_plan\":[\"...\"],\"intent_summary\":\"짧은 한국어 요약\"}."
         )
     )
-    prompt = (
-        "너는 청주 여행 Agent의 의도 해석기다. 사용자의 자연어 입력을 여행 선호 태그와 제약으로 해석해라. "
-        "키워드 체크박스는 보조 조건일 뿐이며 자연어 요청을 우선한다. "
-        "리뷰/후기/평점/인기/요즘/최신성 근거가 필요하면 needs_external_review를 true로 둔다. "
-        "이동거리 짧게/가까운 곳/동선 짧게 요청이면 needs_short_route를 true로 둔다. "
-        "사람 많은 곳 제외/조용한 장소 요청이면 needs_quiet를 true로 둔다. "
-        "반드시 JSON 객체만 출력해라. tags는 아래 허용 태그 중 필요한 것만 골라라: "
-        f"{list(STYLE_KEYWORDS.keys())}. "
-        f"{format_instructions}\n\n"
-        f"이전 대화 메모리: {json.dumps(state.get('memory_context', []), ensure_ascii=False)}\n"
-        f"사용자 입력: {state['style_text']}\n"
-        f"보조 선택 키워드: {json.dumps(state.get('selected_keywords', []), ensure_ascii=False)}\n"
-        f"로컬 1차 의도 분석: {json.dumps(local_intent, ensure_ascii=False)}\n"
-        f"기간: {state['duration']}, 이동수단: {state['transport']}, 날씨: {state['weather']}, 예산: {state['budget']}"
+    prompt = INTENT_ANALYSIS_PROMPT.format(
+        style_keywords=list(STYLE_KEYWORDS.keys()),
+        format_instructions=format_instructions,
+        memory_context=json.dumps(state.get("memory_context", []), ensure_ascii=False),
+        style_text=state["style_text"],
+        selected_keywords=json.dumps(state.get("selected_keywords", []), ensure_ascii=False),
+        local_intent=json.dumps(local_intent, ensure_ascii=False),
+        duration=state["duration"],
+        transport=state["transport"],
+        weather=state["weather"],
+        budget=state["budget"],
     )
     provider = model_provider()
-    parsed, mode = provider.json_tool(prompt)
+    parsed, mode = provider.json_tool(prompt, parser=INTENT_OUTPUT_PARSER)
     if not parsed:
         return fallback_tags, local_intent, f"의도 해석 Fallback: {mode}"
 
     try:
-        intent_model = INTENT_OUTPUT_PARSER.parse(json.dumps(parsed, ensure_ascii=False)) if INTENT_OUTPUT_PARSER else TravelIntent.model_validate(parsed)
+        intent_model = TravelIntent.model_validate(parsed)
         parsed = intent_model.model_dump()
     except (ValidationError, ValueError) as error:
         fallback_intent = {**local_intent, "intent_summary": f"Pydantic OutputParser 검증 실패: {error}"}
@@ -2933,6 +1558,9 @@ def start_proximity_score(distance_km: float, transport: str) -> float:
     return max(-4.0, -distance_km * 0.12)
 
 
+CATEGORY_SCORE_RULES = APP_CONFIG["category_score_rules"]
+
+
 def category_preference_score(place: dict[str, Any], tags: list[str]) -> float:
     category = place["category"]
     score = 0.0
@@ -2948,14 +1576,11 @@ def category_preference_score(place: dict[str, Any], tags: list[str]) -> float:
             score += 12.0
         elif category == "동물체험" and not any(word in haystack for word in ["반려견", "애견", "펫", "강아지", "댕댕", "멍뭉", "퍼피"]):
             score += 7.0
-    if "카페" in tags and category in {"카페", "카페거리", "상권"}:
-        score += 3.0
-    if "맛집" in tags and category in {"맛집", "시장", "상권", "카페거리"}:
-        score += 3.0
-    if "쇼핑" in tags and category in {"상권", "시장"}:
-        score += 2.6
-    if "놀거리" in tags and category in {"놀거리", "동물체험"}:
-        score += 4.0
+    score += sum(
+        float(rule["score"])
+        for rule in CATEGORY_SCORE_RULES
+        if rule["tag"] in tags and category in rule["categories"]
+    )
     if "노래방" in tags:
         if "노래방" in place_tags:
             score += 8.0
@@ -2971,12 +1596,6 @@ def category_preference_score(place: dict[str, Any], tags: list[str]) -> float:
             score += 8.0
         elif category == "놀거리":
             score += 1.5
-    if "역사" in tags and category in {"박물관", "관광지"}:
-        score += 2.6
-    if "산책" in tags and category in {"공원", "관광지"}:
-        score += 2.2
-    if "자연" in tags and category in {"공원", "관광지"}:
-        score += 2.2
     return score
 
 
@@ -3139,173 +1758,32 @@ def transport_filtered_places(
     return ranked_places
 
 
-def itinerary_slots(duration: str, tags: list[str] | None = None) -> list[dict[str, Any]]:
-    tags = tags or []
-    tag_set = set(tags)
+SLOT_RULES = APP_CONFIG["slot_rules"]
+DEFAULT_SLOTS = APP_CONFIG["default_slots"]
+DAY_TRIP_FALLBACK_SLOTS = APP_CONFIG["day_trip_fallback_slots"]
 
+
+def itinerary_slots(duration: str, tags: list[str] | None = None) -> list[dict[str, Any]]:
+    tag_set = set(tags or [])
     slots: list[dict[str, Any]] = []
 
     def add_slot(role: str, label: str) -> None:
-        """같은 label이 중복으로 너무 많이 들어가지 않게 추가"""
-        exists = any(slot["role"] == role and slot["label"] == label for slot in slots)
-        if not exists:
+        if not any(slot["role"] == role and slot["label"] == label for slot in slots):
             slots.append({"day": 1, "role": role, "label": label})
 
-    # =========================
-    # 1. 음식 / 카페 계열
-    # =========================
-    if "맛집" in tag_set or "식사" in tag_set or "밥집" in tag_set:
-        add_slot("meal", "밥집")
+    for rule in SLOT_RULES:
+        if set(rule["terms"]).intersection(tag_set):
+            for role, label in rule["slots"]:
+                add_slot(role, label)
 
-    if "카페" in tag_set or "디저트" in tag_set or "커피" in tag_set or "베이커리" in tag_set:
-        add_slot("cafe", "카페")
+    if {"실내", "비", "우천", "더움", "추움"}.intersection(tag_set) and not {"산책", "자연", "공원"}.intersection(tag_set):
+        slots = [slot for slot in slots if slot["role"] != "walk"]
 
-    if "브런치" in tag_set:
-        add_slot("cafe", "브런치 카페")
-
-    if "가성비" in tag_set:
-        add_slot("meal", "가성비 밥집")
-        add_slot("cafe", "가성비 카페")
-
-    if "혼밥" in tag_set:
-        add_slot("meal", "혼밥")
-
-    if "술집" in tag_set:
-        add_slot("meal", "식사 가능한 술집")
-
-    # =========================
-    # 2. 특정 놀거리 계열
-    # =========================
-    if "동물" in tag_set or "동물먹이" in tag_set or "동물체험" in tag_set:
-        add_slot("activity", "동물체험")
-
-    if "노래방" in tag_set:
-        add_slot("activity", "노래방")
-
-    if "PC방" in tag_set or "피시방" in tag_set:
-        add_slot("activity", "PC방")
-
-    if "보드게임" in tag_set:
-        add_slot("activity", "보드게임")
-
-    if "볼링" in tag_set:
-        add_slot("activity", "볼링")
-
-    if "방탈출" in tag_set:
-        add_slot("activity", "방탈출")
-
-    if "영화" in tag_set or "영화관" in tag_set:
-        add_slot("activity", "영화관")
-
-    if "전시" in tag_set or "박물관" in tag_set or "미술관" in tag_set:
-        add_slot("activity", "전시/박물관")
-
-    if "놀거리" in tag_set:
-        add_slot("activity", "놀거리")
-
-    # =========================
-    # 3. 산책 / 자연 / 사진 / 관광 계열
-    # =========================
-    if "산책" in tag_set or "자연" in tag_set or "공원" in tag_set or "힐링" in tag_set:
-        add_slot("walk", "산책/자연")
-
-    if "사진" in tag_set or "포토" in tag_set or "인생샷" in tag_set or "야경" in tag_set:
-        add_slot("activity", "사진 명소")
-
-    if "역사" in tag_set or "문화" in tag_set or "관광" in tag_set or "관광지" in tag_set:
-        add_slot("activity", "역사/문화")
-
-    if "쇼핑" in tag_set or "상권" in tag_set or "시장" in tag_set:
-        add_slot("activity", "쇼핑/상권")
-
-    # =========================
-    # 4. 상황/동행자 기반 태그
-    # =========================
-
-    # 데이트: 밥 + 카페 + 사진/산책/놀거리 조합
-    if "데이트" in tag_set or "커플" in tag_set:
-        add_slot("meal", "데이트 밥집")
-        add_slot("cafe", "감성 카페")
-        add_slot("activity", "데이트 코스")
-        add_slot("walk", "산책/사진")
-
-    # 부모님/가족: 너무 활동적인 것보다 식사 + 카페 + 산책/관광
-    if "부모님" in tag_set or "가족" in tag_set or "어른" in tag_set:
-        add_slot("meal", "가족 식사")
-        add_slot("cafe", "편한 카페")
-        add_slot("walk", "가벼운 산책")
-        add_slot("activity", "관광/문화")
-
-    # 아이/어린이: 동물, 공원, 체험 위주
-    if "아이" in tag_set or "어린이" in tag_set or "유아" in tag_set:
-        add_slot("meal", "아이와 식사")
-        add_slot("activity", "아이 체험")
-        add_slot("walk", "공원/산책")
-        add_slot("cafe", "가족 카페")
-
-    # 친구: 밥 + 놀거리 + 카페
-    if "친구" in tag_set or "모임" in tag_set:
-        add_slot("meal", "친구와 밥집")
-        add_slot("activity", "친구와 놀거리")
-        add_slot("cafe", "카페")
-
-    # 혼자: 혼밥 + 카페 + 산책
-    if "혼자" in tag_set or "혼놀" in tag_set:
-        add_slot("meal", "혼밥")
-        add_slot("cafe", "혼자 가기 좋은 카페")
-        add_slot("walk", "가벼운 산책")
-
-    # =========================
-    # 5. 분위기/조건 기반 태그
-    # =========================
-
-    # 실내 요청이면 실외 산책 강제하지 않음
-    if "실내" in tag_set or "비" in tag_set or "우천" in tag_set or "더움" in tag_set or "추움" in tag_set:
-        add_slot("meal", "실내 밥집")
-        add_slot("cafe", "실내 카페")
-        add_slot("activity", "실내 놀거리")
-
-        # 실내 요청인데 산책/자연이 명시되지 않았다면 walk 제거
-        if not {"산책", "자연", "공원"}.intersection(tag_set):
-            slots = [slot for slot in slots if slot["role"] != "walk"]
-
-    # 실외 요청이면 공원/사진 쪽 추가
-    if "실외" in tag_set or "야외" in tag_set:
-        add_slot("walk", "야외 산책")
-        add_slot("activity", "야외 사진 명소")
-
-    # 조용한 요청
-    if "조용" in tag_set or "한적" in tag_set or "힐링" in tag_set:
-        add_slot("cafe", "조용한 카페")
-        add_slot("walk", "한적한 산책")
-
-    # 인기/핫플 요청
-    if "인기" in tag_set or "핫플" in tag_set or "유명" in tag_set or "요즘" in tag_set:
-        add_slot("meal", "인기 맛집")
-        add_slot("cafe", "인기 카페")
-
-    # 짧은 동선 요청
-    if "근처" in tag_set or "가까운" in tag_set or "짧은동선" in tag_set:
-        add_slot("meal", "가까운 밥집")
-        add_slot("cafe", "가까운 카페")
-
-    # =========================
-    # 6. 아무 태그도 못 잡았을 때 기본 일정
-    # =========================
     if not slots:
-        return [
-            {"day": 1, "role": "meal", "label": "밥집"},
-            {"day": 1, "role": "cafe", "label": "카페"},
-            {"day": 1, "role": "activity", "label": "가벼운 놀거리"},
-        ]
+        slots = [dict(slot) for slot in DEFAULT_SLOTS]
 
-    # =========================
-    # 7. 일정이 너무 짧으면 자연스럽게 보완
-    # =========================
     has_meal = any(slot["role"] == "meal" for slot in slots)
     has_cafe = any(slot["role"] == "cafe" for slot in slots)
-    has_activity = any(slot["role"] == "activity" for slot in slots)
-    has_walk = any(slot["role"] == "walk" for slot in slots)
 
     if len(slots) == 1:
         if not has_meal:
@@ -3319,9 +1797,9 @@ def itinerary_slots(duration: str, tags: list[str] | None = None) -> list[dict[s
         elif not has_cafe and "카페" not in tag_set:
             slots.append({"day": 1, "role": "cafe", "label": "카페"})
 
-    # =========================
-    # 8. 너무 길면 최대 5개까지만 사용
-    # =========================
+    if duration == "당일치기":
+        slots.extend(dict(slot) for slot in DAY_TRIP_FALLBACK_SLOTS[: max(0, 5 - len(slots))])
+
     return slots[:5]
 
 
@@ -3648,6 +2126,7 @@ def recommendation_tool(
         key=lambda item: (item["agent_score"], -item["start_distance_km"]),
         reverse=True,
     )
+    full_ranked_places = ranked_places[:]
     if "동물먹이" in tags:
         ranked_places = [
             place
@@ -3690,7 +2169,16 @@ def recommendation_tool(
             selected.append(chosen)
             current = chosen
 
-    return enforce_preferred_tag(selected, ranked_places, tags)
+    selected = enforce_preferred_tag(selected, ranked_places, tags)
+    return fill_route_to_minimum(
+        selected,
+        transport_filtered_places(full_ranked_places, target_count, transport),
+        tags,
+        budget,
+        start_point,
+        transport,
+        min_count=5 if duration == "당일치기" else len(slots),
+    )
 
 
 def candidate_lookup_tool(
@@ -3792,26 +2280,6 @@ def candidate_lookup_tool(
             selected_names.add(place["name"])
 
     return slots, selected[:max_candidates]
-
-
-def place_to_document(place: dict[str, Any]) -> Any:
-    page_content = (
-        f"{place.get('name', '')}\n"
-        f"category={place.get('category', '')}; role={place.get('role', '')}; "
-        f"tags={', '.join(place.get('tags', []))}; address={place.get('address', '')}; "
-        f"source={place.get('source', '')}; score={place.get('score', '')}"
-    )
-    metadata = {
-        "name": place.get("name"),
-        "category": place.get("category"),
-        "role": place.get("role"),
-        "tags": place.get("tags", []),
-        "source": place.get("source"),
-        "address": place.get("address"),
-    }
-    if Document:
-        return Document(page_content=page_content, metadata=metadata)
-    return {"page_content": page_content, "metadata": metadata}
 
 
 def document_to_context(document: Any) -> dict[str, Any]:
@@ -4054,6 +2522,68 @@ def with_slot_metadata(place: dict[str, Any], slot: dict[str, Any], tags: list[s
     }
 
 
+def fill_route_to_minimum(
+    selected: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    tags: list[str],
+    budget: int,
+    start_point: dict[str, float],
+    transport: str,
+    min_count: int = 5,
+    intent: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    if len(selected) >= min_count:
+        return selected
+
+    filled = selected[:]
+    used_names = {place["name"] for place in filled}
+    remaining_budget = budget - sum(int(place.get("cost") or 0) for place in filled)
+    current = filled[-1] if filled else start_point
+    pool = [place for place in candidates if place["name"] not in used_names]
+
+    while len(filled) < min_count:
+        available = [
+            place
+            for place in pool
+            if place["name"] not in used_names
+            and can_use_next_place(current, place, transport, remaining_budget)
+            and not duplicates_activity_type(place, filled)
+        ]
+        if not available:
+            available = [
+                place
+                for place in pool
+                if place["name"] not in used_names
+                and can_use_next_place(current, place, transport, remaining_budget)
+            ]
+        if not available:
+            break
+
+        slot = {
+            "day": 1,
+            "role": available[0].get("role") or place_role_for_category(available[0]["category"]),
+            "label": role_label(available[0].get("role") or place_role_for_category(available[0]["category"])),
+        }
+        chosen = max(
+            available,
+            key=lambda place: constrained_candidate_score(
+                current,
+                place,
+                remaining_budget,
+                transport,
+                intent,
+            ),
+        )
+        slot["role"] = chosen.get("role") or place_role_for_category(chosen["category"])
+        slot["label"] = role_label(slot["role"])
+        filled.append(with_slot_metadata(chosen, slot, tags))
+        used_names.add(chosen["name"])
+        remaining_budget -= int(chosen.get("cost") or 0)
+        current = chosen
+
+    return filled
+
+
 def enforce_day_trip_constraints(
     state: AgentState,
     route: list[dict[str, Any]],
@@ -4072,8 +2602,6 @@ def enforce_day_trip_constraints(
 
     pool_by_name: dict[str, dict[str, Any]] = {}
     for place in candidates + route:
-        if place.get("category") == "숙소" or place.get("role") == "lodging":
-            continue
         if is_memory_excluded_place(place, excluded_name_keys):
             continue
         pool_by_name[place["name"]] = place
@@ -4129,7 +2657,17 @@ def enforce_day_trip_constraints(
         remaining_budget -= chosen["cost"]
         current = chosen
 
-    return selected
+    return fill_route_to_minimum(
+        selected,
+        pool,
+        state["tags"],
+        state["budget"],
+        state["start_point"],
+        state["transport"],
+        min_count=5,
+        intent=intent,
+    )
+
 
 
 def append_missing_keyword_warnings(state: AgentState, route: list[dict[str, Any]]) -> None:
@@ -4167,38 +2705,23 @@ def llm_route_planner_tool(
         compact_candidate_for_llm(index, place)
         for index, place in enumerate(candidates, start=1)
     ]
-    prompt = (
-        "너는 청주 여행 동선을 직접 판단하는 AI Agent다. 아래 후보 목록만 사용해서 여행 일정을 선택해라. "
-        "이전 추천에 이미 나온 장소는 다시 고르지 마라. "
-        "이번 호출 한 번 안에서 밥집, 카페, 놀거리/관광지, 이동 순서를 모두 결정해라. "
-        "규칙 점수는 참고자료일 뿐이고, 최종 선택은 네가 사용자 의도, 품질점수, 실제 방문 가능성, "
-        "거리, 예산, 카테고리 균형, review_boost 외부 리뷰 근거를 비교해서 결정한다. "
-        "같은 동네와 같은 음식 종류가 반복되면 감점해라. "
-        "출발지가 충북대이면 사창동, 개신동, 복대동 후보를 우선 비교하고, "
-        "출발지가 청주고속버스터미널이면 가경동, 청주 터미널, 지웰시티, 현대백화점 주변 후보를 우선 비교해라. "
-        "출발지가 오송역이면 오송역/오송읍 후보를 우선 비교하고, "
-        "출발지가 동남지구이면 동남지구/용암동/방서동 후보를 우선 비교해라. "
-        "품질점수가 낮거나 지도/전화/주소 근거가 약한 곳, 사용 의도와 카테고리가 맞지 않는 곳은 고르지 마라. "
-        "선택 키워드에 맞는 후보가 이동/예산 조건 안에 없으면 억지로 먼 후보를 고르지 말고, rejected_notes에 없다고 적은 뒤 가까운 대체 장소를 골라라. "
-        "반드시 JSON 객체만 출력해라.\n\n"
-        "JSON 스키마: {\"selected\":[{\"candidate_id\":1,\"day\":1,\"slot_role\":\"meal\","
-        "\"slot_label\":\"점심\",\"reason\":\"선택 이유\"}],\"decision_summary\":\"판단 요약\","
-        "\"rejected_notes\":[\"제외 판단\"]}.\n"
-        "selected 개수는 slots 개수를 넘기지 말고, 예산 안에 최대한 맞춰라.\n\n"
-        f"사용자 요청: {state['style_text']}\n"
-        f"보조 선택 키워드: {json.dumps(state.get('selected_keywords', []), ensure_ascii=False)}\n"
-        f"대화 메모리: {json.dumps(state.get('memory_context', []), ensure_ascii=False)}\n"
-        f"이번 추천에서 제외해야 하는 이전 추천 장소: {json.dumps(excluded_place_names, ensure_ascii=False)}\n"
-        f"LLM 의도 해석: {json.dumps(intent, ensure_ascii=False)}\n"
-        f"태그: {tags}\n"
-        f"출발지: {state['start_name']}, 기간: {state['duration']}, 이동수단: {state['transport']}, "
-        f"예산: {state['budget']}\n"
-        f"필요 슬롯: {json.dumps(slots, ensure_ascii=False)}\n"
-        f"RAG 검색 문서 Context: {json.dumps(retrieved_documents or [], ensure_ascii=False)}\n"
-        f"후보 목록: {json.dumps(compact_candidates, ensure_ascii=False)}"
+    prompt = ROUTE_PLANNER_PROMPT.format(
+        style_text=state["style_text"],
+        selected_keywords=json.dumps(state.get("selected_keywords", []), ensure_ascii=False),
+        memory_context=json.dumps(state.get("memory_context", []), ensure_ascii=False),
+        excluded_place_names=json.dumps(excluded_place_names, ensure_ascii=False),
+        intent=json.dumps(intent, ensure_ascii=False),
+        tags=tags,
+        start_name=state["start_name"],
+        duration=state["duration"],
+        transport=state["transport"],
+        budget=state["budget"],
+        slots=json.dumps(slots, ensure_ascii=False),
+        retrieved_documents=json.dumps(retrieved_documents or [], ensure_ascii=False),
+        compact_candidates=json.dumps(compact_candidates, ensure_ascii=False),
     )
     provider = model_provider()
-    parsed, mode = provider.json_tool(prompt, temperature=0.25, timeout=25)
+    parsed, mode = provider.json_tool(prompt, parser=ROUTE_DECISION_OUTPUT_PARSER, temperature=0.25, timeout=25)
     if not parsed:
         logger.warning("LLM route planner failed: %s", mode)
         return [], f"LLM 동선 선택 Fallback: {mode}", {}
@@ -4305,21 +2828,13 @@ def distance_tool(
     route: list[dict[str, Any]],
     transport: str,
     duration: str,
-    accommodation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     speed = TRANSPORT_SPEED_KMH[transport]
     legs = []
     current_name = "출발지"
     current = start_point
-    current_day = 1
 
     for place in route:
-        place_day = int(place.get("day", 1))
-        if accommodation and place_day != current_day:
-            current_name = accommodation["name"]
-            current = accommodation
-            current_day = place_day
-
         distance = haversine_km(current, place)
         walk_minutes = max(5, round(distance / TRANSPORT_SPEED_KMH["도보 중심"] * 60))
         mode = "walk"
@@ -4382,19 +2897,25 @@ def distance_tool(
     return legs
 
 
-def accommodation_tool(
-    state: AgentState,
-    route: list[dict[str, Any]],
-    place_cost: int,
-) -> dict[str, Any] | None:
-    return None
+def langchain_place_search(query: str) -> str:
+    """청주 로컬 장소 DB에서 사용자 요청과 관련된 RAG 문서를 검색합니다."""
+    return json.dumps(retrieve_relevant_place_documents(query, max_documents=8), ensure_ascii=False)
+
+
+def langchain_distance_summary(route_json: str) -> str:
+    """장소 목록 JSON을 받아 순서대로 거리와 이동 시간을 계산합니다."""
+    route = json.loads(route_json)
+    legs = distance_tool(START_POINTS["충북대"], route, "대중교통", "당일치기")
+    return json.dumps(legs, ensure_ascii=False)
+
+
+LANGCHAIN_TOOLS = [tool(langchain_place_search), tool(langchain_distance_summary)] if tool else []
 
 
 def build_schedule(
     route: list[dict[str, Any]],
     legs: list[dict[str, Any]],
     duration: str,
-    accommodation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     start_hour = 10
     current_minutes = start_hour * 60
@@ -4443,112 +2964,31 @@ def build_tool_decision(
     planner_mode: str,
     tool_events: list[str] | None,
     legs: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
     intent = intent or {}
     tool_events = tool_events or []
 
-    tavily_used = any(
-        "Tavily" in event and "검색 후" in event
-        for event in tool_events
-    )
+    def item(tool: str, used: bool, reason: str) -> dict[str, Any]:
+        return {"tool": tool, "used": used, "reason": reason}
 
-    tavily_skipped = any(
-        "Tavily" in event and "생략" in event
-        for event in tool_events
-    )
-
-    transit_used = any(
-        leg.get("mode") == "transit" and leg.get("transit_options")
-        for leg in legs
-    )
-
-    transit_attempted = any(
-        leg.get("mode") == "transit"
-        for leg in legs
-    )
-
+    tavily_used = any("Tavily" in event and "검색 후" in event for event in tool_events)
+    tavily_skipped = any("Tavily" in event and "생략" in event for event in tool_events)
+    transit_used = any(leg.get("mode") == "transit" and leg.get("transit_options") for leg in legs)
+    transit_attempted = any(leg.get("mode") == "transit" for leg in legs)
     llm_route_used = "Fallback" not in planner_mode
 
     return [
-        {
-            "tool": "입력 검증 Middleware",
-            "used": True,
-            "reason": "출발지, 예산, 이동수단, 여행 기간 입력값을 검증하기 위해 사용했습니다.",
-        },
-        {
-            "tool": "개인정보 제거 Middleware",
-            "used": True,
-            "reason": "사용자 입력에서 전화번호, 이메일 등 개인정보 형식을 제거하기 위해 사용했습니다.",
-        },
-        {
-            "tool": "Session Memory",
-            "used": bool(state.get("memory_context")),
-            "reason": (
-                "이전 대화 조건을 이어받아 멀티턴 요청을 처리했습니다."
-                if state.get("memory_context")
-                else "이전 대화 맥락이 없어 현재 입력만 기준으로 처리했습니다."
-            ),
-        },
-        {
-            "tool": "자연어 의도 분석 Tool",
-            "used": True,
-            "reason": "사용자의 여행 스타일 문장을 태그, 필수 조건, 회피 조건으로 변환하기 위해 사용했습니다.",
-        },
-        {
-            "tool": "RAG 후보 검색 Tool",
-            "used": True,
-            "reason": "로컬 장소 DB를 LangChain Document 형태로 변환하고 사용자 조건과 맞는 후보를 검색하기 위해 사용했습니다.",
-        },
-        {
-            "tool": "Tavily 리뷰 근거 검색 Tool",
-            "used": tavily_used,
-            "reason": (
-                "사용자가 리뷰, 평점, 인기, 최신성 근거를 요구하여 외부 검색 결과를 후보 점수에 반영했습니다."
-                if tavily_used
-                else "리뷰/평점/인기/최신성 조건이 없거나 API 키가 없어 외부 리뷰 검색을 생략했습니다."
-                if tavily_skipped or not intent.get("needs_external_review")
-                else "외부 리뷰 검색 조건은 감지되었지만 검색 결과를 반영하지 못했습니다."
-            ),
-        },
-        {
-            "tool": "LLM 동선 선택 Tool",
-            "used": llm_route_used,
-            "reason": (
-                "검색된 후보 장소와 RAG Context를 비교하여 최종 동선을 선택하기 위해 사용했습니다."
-                if llm_route_used
-                else "LLM 동선 선택이 실패했거나 결과가 비어 있어 사용하지 못했습니다."
-            ),
-        },
-        {
-            "tool": "규칙 기반 Fallback Tool",
-            "used": not llm_route_used,
-            "reason": (
-                "LLM 동선 선택 실패 또는 빈 결과를 보완하기 위해 규칙 기반 추천을 사용했습니다."
-                if not llm_route_used
-                else "LLM 동선 선택이 성공하여 Fallback은 사용하지 않았습니다."
-            ),
-        },
-        {
-            "tool": "거리/동선 계산 Tool",
-            "used": True,
-            "reason": "장소 간 거리, 이동 시간, 총 이동 거리를 계산하기 위해 사용했습니다.",
-        },
-        {
-            "tool": "ODSay 대중교통 Tool",
-            "used": transit_used,
-            "reason": (
-                "대중교통 이동 구간에서 실제 버스 경로 후보를 계산하기 위해 사용했습니다."
-                if transit_used
-                else "대중교통 경로를 시도했지만 경로가 없거나 API 오류로 상세 후보를 반영하지 못했습니다."
-                if transit_attempted
-                else "도보 가능 구간이거나 도보 중심 조건이라 대중교통 상세 검색을 생략했습니다."
-            ),
-        },
-        {
-            "tool": "OutputParser",
-            "used": True,
-            "reason": "최종 응답을 TripPlan Pydantic 구조로 검증하기 위해 사용했습니다.",
-        },
+        item("입력 검증 Middleware", True, "출발지, 예산, 이동수단, 여행 기간 입력값을 검증하기 위해 사용했습니다."),
+        item("개인정보 제거 Middleware", True, "사용자 입력에서 전화번호, 이메일 등 개인정보 형식을 제거하기 위해 사용했습니다."),
+        item("Session Memory", bool(state.get("memory_context")), "이전 대화 조건을 이어받아 멀티턴 요청을 처리했습니다." if state.get("memory_context") else "이전 대화 맥락이 없어 현재 입력만 기준으로 처리했습니다."),
+        item("자연어 의도 분석 Tool", True, "사용자의 여행 스타일 문장을 태그, 필수 조건, 회피 조건으로 변환하기 위해 사용했습니다."),
+        item("RAG 후보 검색 Tool", True, "로컬 장소 DB를 LangChain Document 형태로 변환하고 사용자 조건과 맞는 후보를 검색하기 위해 사용했습니다."),
+        item("Tavily 리뷰 근거 검색 Tool", tavily_used, "사용자가 리뷰, 평점, 인기, 최신성 근거를 요구하여 외부 검색 결과를 후보 점수에 반영했습니다." if tavily_used else "리뷰/평점/인기/최신성 조건이 없거나 API 키가 없어 외부 리뷰 검색을 생략했습니다." if tavily_skipped or not intent.get("needs_external_review") else "외부 리뷰 검색 조건은 감지되었지만 검색 결과를 반영하지 못했습니다."),
+        item("LLM 동선 선택 Tool", llm_route_used, "검색된 후보 장소와 RAG Context를 비교하여 최종 동선을 선택하기 위해 사용했습니다." if llm_route_used else "LLM 동선 선택이 실패했거나 결과가 비어 있어 사용하지 못했습니다."),
+        item("규칙 기반 Fallback Tool", not llm_route_used, "LLM 동선 선택 실패 또는 빈 결과를 보완하기 위해 규칙 기반 추천을 사용했습니다." if not llm_route_used else "LLM 동선 선택이 성공하여 Fallback은 사용하지 않았습니다."),
+        item("거리/동선 계산 Tool", True, "장소 간 거리, 이동 시간, 총 이동 거리를 계산하기 위해 사용했습니다."),
+        item("ODSay 대중교통 Tool", transit_used, "대중교통 이동 구간에서 실제 버스 경로 후보를 계산하기 위해 사용했습니다." if transit_used else "대중교통 경로를 시도했지만 경로가 없거나 API 오류로 상세 후보를 반영하지 못했습니다." if transit_attempted else "도보 가능 구간이거나 도보 중심 조건이라 대중교통 상세 검색을 생략했습니다."),
+        item("OutputParser", True, "최종 응답을 TripPlan Pydantic 구조로 검증하기 위해 사용했습니다."),
     ]
 
 
@@ -4587,7 +3027,6 @@ def build_middleware_decision(state: AgentState) -> list[dict[str, Any]]:
     memory_context = state.get("memory_context", [])
 
     privacy_used = any("개인정보 제거 Middleware" in warning for warning in warnings)
-    fallback_used = any("Fallback Middleware" in warning for warning in warnings)
     memory_used = bool(memory_context)
 
     return [
@@ -4614,36 +3053,32 @@ def build_middleware_decision(state: AgentState) -> list[dict[str, Any]]:
                 else "이전 대화 맥락을 이어받는 요청이 아니어서 메모리 병합을 사용하지 않았습니다."
             ),
         },
-        {
-            "name": "Fallback Middleware",
-            "used": fallback_used,
-            "reason": (
-                "지원하지 않는 출발지, 이동수단, 여행 기간 입력을 기본값으로 대체했습니다."
-                if fallback_used
-                else "입력값이 정상 범위라 기본값 대체가 필요하지 않았습니다."
-            ),
-        },
     ]
+
+
+BASE_AGENT_FLOW = APP_CONFIG["agent_flow"]
+
+
+def build_agent_flow(intent: dict[str, Any] | None, tool_events: list[str] | None) -> list[str]:
+    tool_plan = (intent or {}).get("tool_plan", [])
+    plan_line = f"Agent Tool 선택 계획: {' → '.join(tool_plan)}" if tool_plan else "Agent Tool 선택 계획: 로컬 기본 계획"
+    return [*BASE_AGENT_FLOW[:7], plan_line, *BASE_AGENT_FLOW[7:11], *(tool_events or []), *BASE_AGENT_FLOW[11:]]
 
 
 def output_parser(
     state: AgentState,
     route: list[dict[str, Any]],
     legs: list[dict[str, Any]],
-    accommodation: dict[str, Any] | None = None,
     planner_mode: str = "규칙 기반 추천",
     intent: dict[str, Any] | None = None,
     planner_decision: dict[str, Any] | None = None,
     rag_document_count: int = 0,
     tool_events: list[str] | None = None,
 ) -> dict[str, Any]:
-    place_cost = sum(place["cost"] for place in route)
-    accommodation = accommodation if accommodation is not None else accommodation_tool(state, route, place_cost)
-    lodging_cost = accommodation["cost"] if accommodation else 0
-    total_cost = place_cost + lodging_cost
+    total_cost = sum(place["cost"] for place in route)
     total_distance = round(sum(leg["distance_km"] for leg in legs), 2)
     total_move_minutes = sum(leg["move_minutes"] for leg in legs)
-    finish = f"{accommodation['name']} 체크인" if accommodation else "출발지 복귀 또는 성안길 카페 마무리"
+    finish = "출발지 복귀 또는 성안길 카페 마무리"
     ai_comment, ai_mode = llm_response_tool(
         state,
         route,
@@ -4651,17 +3086,8 @@ def output_parser(
         total_cost,
         total_distance,
         total_move_minutes,
-        accommodation,
     )
     route_names = [state["start_name"]] + [place["name"] for place in route]
-    if accommodation:
-        split_index = next((index for index, place in enumerate(route) if place.get("day", 1) == 2), len(route))
-        route_names = (
-            [state["start_name"]]
-            + [place["name"] for place in route[:split_index]]
-            + [f"{accommodation['name']}(숙소)"]
-            + [place["name"] for place in route[split_index:]]
-        )
 
     raw_result = {
         "summary": {
@@ -4680,13 +3106,11 @@ def output_parser(
             "planner_mode": planner_mode,
             "intent": intent or {},
             "planner_decision_summary": (planner_decision or {}).get("decision_summary"),
-            "lodging_cost": lodging_cost,
             "session_id": state["session_id"],
             "memory_turns": len(state.get("memory_context", [])),
             "rag_document_count": rag_document_count,
         },
-        "schedule": build_schedule(route, legs, state["duration"], accommodation),
-        "accommodation": accommodation,
+        "schedule": build_schedule(route, legs, state["duration"]),
         "places": [
             {
                 "name": place["name"],
@@ -4716,38 +3140,7 @@ def output_parser(
         ],
   "legs": legs,
         "warnings": state["warnings"],
-        "agent_flow": [
-            "LangGraph StateGraph: validate_input",
-            "입력 검증 Middleware",
-            "개인정보 제거 Middleware",
-            "Session Memory 병합",
-            "Fallback Middleware",
-            "LangGraph StateGraph: analyze_intent",
-            "LangChain PydanticOutputParser: TravelIntent",
-            "자연어 의도 분석 Tool",
-            f"Agent Tool 선택 계획: {' → '.join((intent or {}).get('tool_plan', []))}",
-            "LangGraph StateGraph: retrieve_places",
-            "RAG 후보 검색 Tool: 로컬 JSON 장소 DB → LangChain Document Retriever",
-            "VectorStore RAG Retriever: Document → Embeddings → FAISS/Chroma → retriever.invoke",
-            "검색된 후보를 LLM Context로 제공",
-            "품질/실재성 필터 Tool",
-            *(tool_events or []),
-            "LangGraph StateGraph: plan_route",
-            "LLM 후보 비교/동선 선택 Tool",
-            "LangGraph StateGraph: check_quality",
-            "품질 검사 기반 반복 Loop: quality_low and retry_count < 1이면 retrieve_places 재실행",
-            "add_conditional_edges: 품질 낮음/재시도 소진 시 fallback_route 또는 final_response",
-            "LangGraph StateGraph: fallback_route",
-            "규칙 기반 Fallback Tool",
-            "로컬 JSON 장소 DB",
-            "LangGraph StateGraph: final_response",
-            "거리 계산 Tool",
-            "ODSay 대중교통 Tool: 대중교통 장거리 구간 경로 확인",
-            "동선 최적화 Tool",
-            "Context 생성",
-            "LLM 응답 생성 Tool",
-            "LangChain PydanticOutputParser: TripPlan",
-        ],
+        "agent_flow": build_agent_flow(intent, tool_events),
         "tool_decision": build_tool_decision(
             state=state,
             intent=intent,
@@ -4773,7 +3166,6 @@ def build_llm_context(
     total_cost: int,
     total_distance: float,
     total_move_minutes: int,
-    accommodation: dict[str, Any] | None = None,
 ) -> str:
     places = [
         {
@@ -4807,7 +3199,6 @@ def build_llm_context(
         "total_cost": total_cost,
         "total_distance_km": total_distance,
         "total_move_minutes": total_move_minutes,
-        "accommodation": accommodation,
     }
     return json.dumps(context, ensure_ascii=False, indent=2)
 
@@ -4818,16 +3209,13 @@ def fast_final_comment(
     total_cost: int,
     total_distance: float,
     total_move_minutes: int,
-    accommodation: dict[str, Any] | None = None,
 ) -> str:
     route_preview = " → ".join(place["name"] for place in route[:3])
     if len(route) > 3:
         route_preview += " → ..."
-    lodging_note = f" 마지막은 {accommodation['name']} 체크인까지 이어집니다." if accommodation else ""
     return (
         f"{state['transport']} 이동과 자연어 요청을 기준으로 {route_preview} 순서가 가장 무난합니다. "
         f"예상 비용은 {total_cost:,}원, 이동은 약 {total_move_minutes}분/{total_distance}km입니다."
-        f"{lodging_note}"
     )
 
 
@@ -4838,11 +3226,10 @@ def llm_response_tool(
     total_cost: int,
     total_distance: float,
     total_move_minutes: int,
-    accommodation: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     if not env_flag("ENABLE_FINAL_LLM", default=False):
         return (
-            fast_final_comment(state, route, total_cost, total_distance, total_move_minutes, accommodation),
+            fast_final_comment(state, route, total_cost, total_distance, total_move_minutes),
             "로컬 Agent 응답",
         )
 
@@ -4853,14 +3240,8 @@ def llm_response_tool(
         total_cost,
         total_distance,
         total_move_minutes,
-        accommodation,
     )
-    prompt = (
-        "너는 청주 여행 추천 Agent의 최종 응답 생성기다. "
-        "아래 JSON Context만 근거로 사용해서 한국어로 3문장 이내의 짧은 추천 코멘트를 작성해라. "
-        "예산과 동선 최적화 이유를 자연스럽게 포함해라.\n\n"
-        f"{context}"
-    )
+    prompt = FINAL_COMMENT_PROMPT.format(context=context)
     llm_text, mode = model_provider().final_comment(prompt, temperature=0.4, timeout=12)
     if llm_text:
         return llm_text, mode
@@ -4875,6 +3256,14 @@ def llm_response_tool(
             f"LLM 호출이 실패해 규칙 기반 Fallback으로 응답했습니다. 실패 사유: {mode}",
             "LLM 실패 Fallback",
         )
+
+
+
+BASE_DIR = BASE_DIR
+GRAPH_MEMORY = GRAPH_MEMORY
+END = END
+StateGraph = StateGraph
+logger = logging.getLogger(__name__)
 
 
 def validate_input_node(graph_state: AgentGraphState) -> AgentGraphState:
@@ -4896,22 +3285,53 @@ def retrieve_places_node(graph_state: AgentGraphState) -> AgentGraphState:
     state = graph_state["state"]
     tags = graph_state.get("tags", state["tags"])
     intent = graph_state.get("intent", {})
+    retry_count = graph_state.get("retry_count", 0)
     try:
-        slots, candidates = candidate_lookup_tool(state, tags, intent)
+        slots, candidates = candidate_lookup_tool(
+            state,
+            tags,
+            intent,
+            max_candidates=72 if retry_count else 48,
+        )
     except RuntimeError as error:
+        logger.error("Place candidate lookup failed: %s", error)
         errors = [
             str(error),
             (
-                "TourAPI를 사용하려면 TOUR_API_KEY 또는 TOURAPI_SERVICE_KEY 환경변수를 설정한 뒤 "
-                "/api/places/sync를 호출하세요."
+                "장소 데이터를 사용하려면 KAKAO_REST_API_KEY를 설정하거나 "
+                "/api/places/sync로 장소 캐시를 다시 생성하세요."
             ),
         ]
         return {"errors": errors, "status": 503, "result": {"errors": errors}}
+
     candidates, tool_events = tavily_review_boost_tool(state, intent, candidates)
+    user_query = " ".join(
+        [
+            state["style_text"],
+            " ".join(tags),
+            json_dumps_for_query(intent),
+        ]
+    )
+    vector_documents = retrieve_relevant_place_documents(user_query, max_documents=10 if retry_count else 8)
+    vector_names = {
+        str(document.get("metadata", {}).get("name"))
+        for document in vector_documents
+        if document.get("metadata", {}).get("name")
+    }
+    if vector_names:
+        for candidate in candidates:
+            if candidate.get("name") in vector_names:
+                candidate["agent_score"] = round(float(candidate.get("agent_score", 0)) + 1.5, 2)
+        candidates.sort(key=lambda item: float(item.get("agent_score", 0)), reverse=True)
+        tool_events.append(f"VectorStore RAG Retriever: 관련 장소 문서 {len(vector_documents)}개를 LLM Context와 후보 점수에 반영")
+    else:
+        tool_events.append("VectorStore RAG Retriever: 관련 문서 없음 또는 임베딩 backend 없음")
+    if retry_count:
+        tool_events.append(f"품질 검사 기반 재검색 Loop: retry_count={retry_count}")
     return {
         "slots": slots,
         "candidates": candidates,
-        "retrieved_documents": retrieve_place_documents(candidates),
+        "retrieved_documents": vector_documents + retrieve_place_documents(candidates),
         "tool_events": tool_events,
     }
 
@@ -4930,6 +3350,64 @@ def plan_route_node(graph_state: AgentGraphState) -> AgentGraphState:
         "recommended": recommended,
         "planner_mode": planner_mode,
         "planner_decision": planner_decision,
+    }
+
+
+def json_dumps_for_query(value: Any) -> str:
+    try:
+        import json
+
+        return json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        return str(value)
+
+
+def check_quality_node(graph_state: AgentGraphState) -> AgentGraphState:
+    state = graph_state["state"]
+    recommended = graph_state.get("recommended", [])
+    slots = graph_state.get("slots", [])
+    retry_count = graph_state.get("retry_count", 0)
+    required_roles = {slot.get("role") for slot in slots if slot.get("role")}
+    selected_roles = {place.get("slot_role") or place.get("role") for place in recommended if place.get("slot_role") or place.get("role")}
+    missing_roles = sorted(required_roles - selected_roles)
+    target_count = min(len(slots), 5) if slots else 3
+    average_quality = (
+        sum(float(place.get("quality_score") or place.get("score") or 0) for place in recommended) / len(recommended)
+        if recommended
+        else 0
+    )
+
+    reasons: list[str] = []
+    too_few_recommendations = len(recommended) < max(1, target_count - 1)
+    if not recommended:
+        reasons.append("LLM이 추천 장소를 선택하지 못했습니다.")
+    if too_few_recommendations:
+        reasons.append(f"추천 장소 수가 부족합니다. selected={len(recommended)}, target={target_count}")
+    if missing_roles:
+        reasons.append(f"일정 구성에 필요한 role이 부족합니다: {', '.join(missing_roles)}")
+    if recommended and average_quality < 3.2:
+        reasons.append(f"추천 평균 품질 점수가 낮습니다: {average_quality:.2f}")
+
+    if not reasons:
+        return {
+            "quality_status": "quality_ok",
+            "quality_route": "final_response",
+            "quality_reasons": [],
+        }
+
+    logger.warning("Route quality low: %s", " / ".join(reasons))
+    state["warnings"].append("추천 품질 검사: " + " / ".join(reasons))
+    if retry_count < 1:
+        return {
+            "retry_count": retry_count + 1,
+            "quality_status": "quality_low",
+            "quality_route": "retry",
+            "quality_reasons": reasons,
+        }
+    return {
+        "quality_status": "quality_low",
+        "quality_route": "fallback_route" if not recommended or missing_roles or too_few_recommendations else "final_response",
+        "quality_reasons": reasons,
     }
 
 
@@ -4992,13 +3470,11 @@ def final_response_node(graph_state: AgentGraphState) -> AgentGraphState:
         return {"errors": errors, "status": 422, "result": {"errors": errors}}
     append_missing_keyword_warnings(state, recommended)
 
-    accommodation = None
-    legs = distance_tool(state["start_point"], recommended, state["transport"], state["duration"], accommodation)
+    legs = distance_tool(state["start_point"], recommended, state["transport"], state["duration"])
     result = output_parser(
         state,
         recommended,
         legs,
-        accommodation,
         planner_mode=planner_mode,
         intent=graph_state.get("intent", {}),
         planner_decision=graph_state.get("planner_decision", {}),
@@ -5006,7 +3482,7 @@ def final_response_node(graph_state: AgentGraphState) -> AgentGraphState:
         tool_events=graph_state.get("tool_events", []),
     )
     remember_turn(state["session_id"], graph_state["payload"], result)
-    return {"state": state, "accommodation": accommodation, "legs": legs, "result": result, "status": 200}
+    return {"state": state, "legs": legs, "result": result, "status": 200}
 
 
 def route_after_validate(graph_state: AgentGraphState) -> str:
@@ -5017,8 +3493,8 @@ def route_after_retrieve(graph_state: AgentGraphState) -> str:
     return "final_response" if graph_state.get("errors") else "plan_route"
 
 
-def route_after_plan(graph_state: AgentGraphState) -> str:
-    return "fallback_route" if not graph_state.get("recommended") else "final_response"
+def route_after_quality(graph_state: AgentGraphState) -> str:
+    return graph_state.get("quality_route", "final_response")
 
 
 def build_agent_graph() -> Any:
@@ -5029,6 +3505,7 @@ def build_agent_graph() -> Any:
     graph_builder.add_node("analyze_intent", analyze_intent_node)
     graph_builder.add_node("retrieve_places", retrieve_places_node)
     graph_builder.add_node("plan_route", plan_route_node)
+    graph_builder.add_node("check_quality", check_quality_node)
     graph_builder.add_node("fallback_route", fallback_route_node)
     graph_builder.add_node("final_response", final_response_node)
     graph_builder.set_entry_point("validate_input")
@@ -5043,20 +3520,111 @@ def build_agent_graph() -> Any:
         route_after_retrieve,
         {"plan_route": "plan_route", "final_response": "final_response"},
     )
+    graph_builder.add_edge("plan_route", "check_quality")
     graph_builder.add_conditional_edges(
-        "plan_route",
-        route_after_plan,
-        {"fallback_route": "fallback_route", "final_response": "final_response"},
+        "check_quality",
+        route_after_quality,
+        {"retry": "retrieve_places", "fallback_route": "fallback_route", "final_response": "final_response"},
     )
     graph_builder.add_edge("fallback_route", "final_response")
     graph_builder.add_edge("final_response", END)
     return graph_builder.compile(checkpointer=GRAPH_MEMORY) if GRAPH_MEMORY else graph_builder.compile()
 
 
-AGENT_GRAPH = None
+AGENT_GRAPH = build_agent_graph()
 
 
 def run_agent(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    from .core import run_agent as core_run_agent
+    initial_state: AgentGraphState = {"payload": payload}
+    if AGENT_GRAPH is None:
+        graph_state = dict(initial_state)
+        graph_state.update(validate_input_node(graph_state))
+        if graph_state.get("errors"):
+            return graph_state["result"], graph_state.get("status", 400)
+        graph_state.update(analyze_intent_node(graph_state))
+        graph_state.update(retrieve_places_node(graph_state))
+        if graph_state.get("errors"):
+            return graph_state["result"], graph_state.get("status", 503)
+        graph_state.update(plan_route_node(graph_state))
+        graph_state.update(check_quality_node(graph_state))
+        if graph_state.get("quality_route") == "retry":
+            graph_state.update(retrieve_places_node(graph_state))
+            if graph_state.get("errors"):
+                return graph_state["result"], graph_state.get("status", 503)
+            graph_state.update(plan_route_node(graph_state))
+            graph_state.update(check_quality_node(graph_state))
+        if graph_state.get("quality_route") == "fallback_route":
+            graph_state.update(fallback_route_node(graph_state))
+        graph_state.update(final_response_node(graph_state))
+    else:
+        session_id = normalize_session_id(payload.get("session_id"))
+        config = {"configurable": {"thread_id": session_id}}
+        graph_state = AGENT_GRAPH.invoke(initial_state, config=config)
+    return graph_state.get("result", {"errors": ["Agent 실행 결과가 비어 있습니다."]}), graph_state.get("status", 500)
 
-    return core_run_agent(payload)
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+PUBLIC_DIR = BASE_DIR / "public"
+app = FastAPI(title="Cheongju Trip Agent")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.mount("/public", StaticFiles(directory=PUBLIC_DIR), name="public")
+
+
+@app.middleware("http")
+async def logging_middleware(request: Request, call_next):
+    logger.info("%s %s", request.method, request.url.path)
+    return await call_next(request)
+
+
+@app.get("/")
+async def index():
+    return FileResponse(PUBLIC_DIR / "index.html")
+
+
+@app.post("/api/recommend")
+async def recommend(payload: dict[str, Any]):
+    result, status = run_agent(payload)
+    if status >= 400:
+        return JSONResponse(result, status_code=status)
+    return result
+
+
+@app.post("/api/places/sync")
+async def sync_places_route():
+    try:
+        places = sync_place_db()
+    except RuntimeError as error:
+        return JSONResponse({"errors": [str(error)]}, status_code=503)
+    payload = json.loads(PLACE_DB_PATH.read_text(encoding="utf-8"))
+    if isinstance(payload, list):
+        payload = {"places": payload}
+    return {
+        "count": len(places),
+        "db_path": str(PLACE_DB_PATH),
+        "source": payload.get("source"),
+        "source_counts": payload.get("source_counts", {}),
+        "sync_errors": payload.get("sync_errors", []),
+        "places": places,
+    }
+
+
+@app.get("/api/health")
+async def health():
+    places = load_place_db()
+    return {"ok": True, "places": len(places), "agent": "openai" if os.getenv("OPENAI_API_KEY") else "local-fallback"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("server:app", host="127.0.0.1", port=int(os.getenv("PORT", "5000")), reload=True)

@@ -1,0 +1,167 @@
+{
+  "start_points": {
+    "청주고속버스터미널": {"lat": 36.626, "lng": 127.4317},
+    "동남지구": {"lat": 36.6175, "lng": 127.515},
+    "충북대": {"lat": 36.6283, "lng": 127.4565},
+    "오송역": {"lat": 36.62, "lng": 127.3275}
+  },
+  "style_keywords": {
+    "카페": ["카페", "커피", "디저트", "감성"],
+    "맛집": ["맛집", "밥", "식사", "먹거리", "시장", "로컬"],
+    "동물": ["동물", "반려견", "강아지", "고양이", "애견", "펫", "동물원"],
+    "동물먹이": ["먹이", "먹여", "먹이주", "사료", "동물 먹"],
+    "놀거리": ["놀거리", "노래방", "노래연습장", "노래연습실", "노래궁", "보드게임", "볼링", "방탈출", "오락", "게임"],
+    "노래방": ["노래방", "노래연습장", "노래연습실", "노래궁", "코인노래"],
+    "PC방": ["PC방", "피시방", "pc방", "게임방"],
+    "보드게임": ["보드게임", "보드게임카페"],
+    "산책": ["산책", "걷", "걷기", "느긋", "힐링"],
+    "사진": ["사진", "포토", "인생샷", "야경", "감성"],
+    "역사": ["역사", "박물관", "전시", "직지", "문화"],
+    "실내": ["실내", "비", "전시", "박물관"],
+    "실외": ["실외", "야외", "밖", "공원"],
+    "자연": ["자연", "공원", "호수", "산성", "벚꽃"],
+    "쇼핑": ["쇼핑", "상권", "거리"]
+  },
+  "selectable_keywords": ["맛집", "카페", "사진", "산책", "노래방", "PC방", "보드게임", "동물", "실내", "실외"],
+  "transport_speed_kmh": {"도보 중심": 4, "대중교통": 18},
+  "allowed_transports": ["대중교통", "도보 중심"],
+  "allowed_durations": ["당일치기"],
+  "cheongju_lat_range": [36.4, 36.75],
+  "cheongju_lng_range": [127.25, 127.65],
+  "place_filters": {
+    "low_priority_repeated_cafe_names": ["목욕탕 카페(카페목간)", "폴앤주비 카페"],
+    "overused_chungbuk_place_names": ["멘야마쯔리 충북대점", "스타벅스 충북대점", "히어로보드 게임카페 충북대점", "메가박스 충북대"],
+    "blocked_place_names": ["청년문화창작소 느티"],
+    "low_confidence_place_names": ["레인데이"],
+    "generic_place_names": ["성안길", "수암골 카페거리", "운리단길 카페거리", "성안길 카페거리", "육거리종합시장", "서문시장 삼겹살거리"],
+    "generic_place_suffixes": ["카페거리", "맛집거리", "삼겹살거리"]
+  },
+  "evidence_terms": {
+    "animal": ["동물", "동물원", "반려견", "애견", "펫", "강아지", "고양이", "멍", "댕"],
+    "activity": ["놀거리", "노래방", "노래연습장", "노래연습실", "노래궁", "코인노래", "볼링", "보드게임", "방탈출", "영화관", "메가박스", "CGV", "롯데시네마", "VR", "피시방", "PC방", "게임"],
+    "cafe": ["카페", "커피", "디저트", "베이커리", "스타벅스", "메가MGC", "메가커피", "투썸", "컴포즈", "빽다방", "이디야"],
+    "meal": ["음식점", "한식", "일식", "중식", "양식", "분식", "식당", "맛집", "국밥", "순대", "돈까스", "돈가스", "버거", "냉면", "칼국수", "만두", "고기", "갈비", "치킨", "피자", "초밥", "카츠", "장어"]
+  },
+  "source_base_quality": {
+    "카카오 Local API": 2.0,
+    "충청북도 관광명소정보 API": 3.0,
+    "로컬 보강 DB": 3.5
+  },
+  "role_defaults": {
+    "meal": {"category": "맛집", "tags": ["맛집", "식사", "로컬"]},
+    "cafe": {"category": "카페", "tags": ["카페", "디저트", "사진"]}
+  },
+  "role_category_map": {
+    "meal": ["맛집", "식당", "시장"],
+    "cafe": ["카페", "카페거리"],
+    "activity": ["동물체험", "놀거리"],
+    "walk": ["공원"]
+  },
+  "role_labels": {
+    "meal": "밥집",
+    "cafe": "카페",
+    "activity": "놀거리",
+    "walk": "산책/마무리",
+    "default": "장소"
+  },
+  "activity_signatures": [
+    {"signature": "노래방", "terms": ["노래방", "노래연습장", "노래연습실", "코인노래"]},
+    {"signature": "PC방", "terms": ["PC방", "피시방", "게임방"]},
+    {"signature": "보드게임", "terms": ["보드게임"]},
+    {"signature": "영화관", "terms": ["영화관", "메가박스", "CGV", "롯데시네마"]},
+    {"signature": "볼링", "terms": ["볼링"]},
+    {"signature": "방탈출", "terms": ["방탈출"]}
+  ],
+  "pet_care_terms": ["반려견", "애견", "펫", "강아지", "댕댕", "멍뭉", "퍼피", "유치원", "놀이터", "미용", "헬스멍"],
+  "kakao_cost_rules": [
+    {"cost": 12000, "terms": ["동물", "반려견", "애견", "펫", "강아지", "고양이", "멍", "댕"], "zero_if_all_terms": ["문암", "놀이터"]},
+    {"cost": 12000, "terms": ["노래방", "코인노래", "볼링", "보드게임", "방탈출", "VR", "피시방", "PC방", "게임"]},
+    {"cost": 15000, "terms": ["체험", "공방", "클래스"]}
+  ],
+  "kakao_area_cost_categories": ["카페거리", "상권", "시장"],
+  "intent_terms": {
+    "needs_external_review": ["리뷰", "후기", "평점", "별점", "방문자", "인기", "핫플", "요즘", "최근", "최신", "유명", "입소문"],
+    "needs_short_route": ["이동 거리 짧", "동선 짧", "가까운", "근처", "멀지 않", "짧게", "이동 적", "이동시간 짧"],
+    "needs_quiet": ["조용", "한적", "사람 많", "붐비", "혼잡", "북적"],
+    "wants_family": ["가족", "아이", "부모님", "어른", "어린이", "유아"],
+    "wants_popular": ["인기", "핫플", "요즘", "유명", "입소문", "많이 가"]
+  },
+  "category_score_rules": [
+    {"tag": "카페", "categories": ["카페", "카페거리", "상권"], "score": 3.0},
+    {"tag": "맛집", "categories": ["맛집", "시장", "상권", "카페거리"], "score": 3.0},
+    {"tag": "쇼핑", "categories": ["상권", "시장"], "score": 2.6},
+    {"tag": "놀거리", "categories": ["놀거리", "동물체험"], "score": 4.0},
+    {"tag": "역사", "categories": ["박물관", "관광지"], "score": 2.6},
+    {"tag": "산책", "categories": ["공원", "관광지"], "score": 2.2},
+    {"tag": "자연", "categories": ["공원", "관광지"], "score": 2.2}
+  ],
+  "slot_rules": [
+    {"terms": ["맛집", "식사", "밥집"], "slots": [["meal", "밥집"]]},
+    {"terms": ["카페", "디저트", "커피", "베이커리"], "slots": [["cafe", "카페"]]},
+    {"terms": ["브런치"], "slots": [["cafe", "브런치 카페"]]},
+    {"terms": ["가성비"], "slots": [["meal", "가성비 밥집"], ["cafe", "가성비 카페"]]},
+    {"terms": ["혼밥"], "slots": [["meal", "혼밥"]]},
+    {"terms": ["술집"], "slots": [["meal", "식사 가능한 술집"]]},
+    {"terms": ["동물", "동물먹이", "동물체험"], "slots": [["activity", "동물체험"]]},
+    {"terms": ["노래방"], "slots": [["activity", "노래방"]]},
+    {"terms": ["PC방", "피시방"], "slots": [["activity", "PC방"]]},
+    {"terms": ["보드게임"], "slots": [["activity", "보드게임"]]},
+    {"terms": ["볼링"], "slots": [["activity", "볼링"]]},
+    {"terms": ["방탈출"], "slots": [["activity", "방탈출"]]},
+    {"terms": ["영화", "영화관"], "slots": [["activity", "영화관"]]},
+    {"terms": ["전시", "박물관", "미술관"], "slots": [["activity", "전시/박물관"]]},
+    {"terms": ["놀거리"], "slots": [["activity", "놀거리"]]},
+    {"terms": ["산책", "자연", "공원", "힐링"], "slots": [["walk", "산책/자연"]]},
+    {"terms": ["사진", "포토", "인생샷", "야경"], "slots": [["activity", "사진 명소"]]},
+    {"terms": ["역사", "문화", "관광", "관광지"], "slots": [["activity", "역사/문화"]]},
+    {"terms": ["쇼핑", "상권", "시장"], "slots": [["activity", "쇼핑/상권"]]},
+    {"terms": ["데이트", "커플"], "slots": [["meal", "데이트 밥집"], ["cafe", "감성 카페"], ["activity", "데이트 코스"], ["walk", "산책/사진"]]},
+    {"terms": ["부모님", "가족", "어른"], "slots": [["meal", "가족 식사"], ["cafe", "편한 카페"], ["walk", "가벼운 산책"], ["activity", "관광/문화"]]},
+    {"terms": ["아이", "어린이", "유아"], "slots": [["meal", "아이와 식사"], ["activity", "아이 체험"], ["walk", "공원/산책"], ["cafe", "가족 카페"]]},
+    {"terms": ["친구", "모임"], "slots": [["meal", "친구와 밥집"], ["activity", "친구와 놀거리"], ["cafe", "카페"]]},
+    {"terms": ["혼자", "혼놀"], "slots": [["meal", "혼밥"], ["cafe", "혼자 가기 좋은 카페"], ["walk", "가벼운 산책"]]},
+    {"terms": ["실내", "비", "우천", "더움", "추움"], "slots": [["meal", "실내 밥집"], ["cafe", "실내 카페"], ["activity", "실내 놀거리"]]},
+    {"terms": ["실외", "야외"], "slots": [["walk", "야외 산책"], ["activity", "야외 사진 명소"]]},
+    {"terms": ["조용", "한적", "힐링"], "slots": [["cafe", "조용한 카페"], ["walk", "한적한 산책"]]},
+    {"terms": ["인기", "핫플", "유명", "요즘"], "slots": [["meal", "인기 맛집"], ["cafe", "인기 카페"]]},
+    {"terms": ["근처", "가까운", "짧은동선"], "slots": [["meal", "가까운 밥집"], ["cafe", "가까운 카페"]]}
+  ],
+  "default_slots": [
+    {"day": 1, "role": "meal", "label": "밥집"},
+    {"day": 1, "role": "cafe", "label": "카페"},
+    {"day": 1, "role": "activity", "label": "가벼운 놀거리"}
+  ],
+  "day_trip_fallback_slots": [
+    {"day": 1, "role": "meal", "label": "밥집"},
+    {"day": 1, "role": "cafe", "label": "카페"},
+    {"day": 1, "role": "activity", "label": "놀거리"},
+    {"day": 1, "role": "activity", "label": "사진/체험"},
+    {"day": 1, "role": "walk", "label": "산책/마무리"}
+  ],
+  "agent_flow": [
+    "LangGraph StateGraph: validate_input",
+    "입력 검증 Middleware",
+    "개인정보 제거 Middleware",
+    "Session Memory 병합",
+    "LangGraph StateGraph: analyze_intent",
+    "LangChain PydanticOutputParser: TravelIntent",
+    "자연어 의도 분석 Tool",
+    "LangGraph StateGraph: retrieve_places",
+    "RAG 후보 검색 Tool: 로컬 JSON 장소 DB → LangChain Document",
+    "검색된 후보를 LLM Context로 제공",
+    "품질/실재성 필터 Tool",
+    "LangGraph StateGraph: plan_route",
+    "LLM 후보 비교/동선 선택 Tool",
+    "LangGraph StateGraph: check_quality",
+    "품질 검사 기반 반복 Loop",
+    "add_conditional_edges: retry/fallback/final_response",
+    "LangGraph StateGraph: fallback_route",
+    "규칙 기반 Fallback Tool",
+    "LangGraph StateGraph: final_response",
+    "거리 계산 Tool",
+    "ODSay 대중교통 Tool",
+    "동선 최적화 Tool",
+    "LLM 응답 생성 Tool",
+    "LangChain PydanticOutputParser: TripPlan"
+  ]
+}

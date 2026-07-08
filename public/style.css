@@ -348,26 +348,6 @@ h3 {
   font-size: 14px;
 }
 
-.lodging-card {
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid #c9ded8;
-  border-left: 4px solid var(--accent);
-  border-radius: 8px;
-  background: #f5fbf9;
-}
-
-.lodging-card h4 {
-  margin-bottom: 4px;
-  font-size: 18px;
-}
-
-.lodging-card p {
-  margin-bottom: 0;
-  color: var(--muted);
-}
-
 .chips,
 .flow,
 .agent-stats {

@@ -1,2 +1,0 @@
-"""Cheongju trip agent package."""
-
