@@ -98,21 +98,22 @@ from pydantic import BaseModel, Field, ValidationError
 
 try:
     from langchain_core.documents import Document
+    from langchain_core.messages import SystemMessage
     from langchain_core.output_parsers import PydanticOutputParser
     from langchain_core.output_parsers import StrOutputParser
     from langchain_core.prompts import PromptTemplate
     from langchain_core.tools import tool
     from langgraph.checkpoint.memory import MemorySaver
-    from langgraph.graph import END, StateGraph
+    from langgraph.prebuilt import create_react_agent
 except ImportError:
     Document = None
+    SystemMessage = None
     PydanticOutputParser = None
     StrOutputParser = None
     PromptTemplate = None
     tool = None
     MemorySaver = None
-    END = "__end__"
-    StateGraph = None
+    create_react_agent = None
 
 
 
@@ -133,10 +134,6 @@ def load_json_file(path: Path) -> Any:
 APP_CONFIG = load_json_file(APP_CONFIG_PATH)
 
 
-CHUNGBUK_TOUR_API_URL = os.getenv(
-    "CHUNGBUK_TOUR_API_URL",
-    "https://tour.chungbuk.go.kr/openapi/tourInfo/attr.do",
-)
 
 KAKAO_LOCAL_API_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY") or os.getenv("KAKAO_API_KEY")
@@ -191,6 +188,146 @@ ACTIVITY_EVIDENCE_TERMS = EVIDENCE_TERMS["activity"]
 MIN_RECOMMENDATION_QUALITY = 3.0
 CAFE_EVIDENCE_TERMS = EVIDENCE_TERMS["cafe"]
 MEAL_EVIDENCE_TERMS = EVIDENCE_TERMS["meal"]
+DEFAULT_SCORE_RULES = {
+    "weather_filter_score": {
+        "비": {"indoor": 2.4, "outdoor": -3.0},
+        "더움": {"indoor": 1.0, "outdoor": -0.3},
+        "추움": {"indoor": 1.2, "outdoor": -0.5},
+        "default": {"indoor": 0.0, "outdoor": 0.4},
+    },
+    "indoor_preference_score": {"matching_tag": "실내", "indoor": 3.0, "outdoor": -5.0},
+    "outdoor_preference_score": {"matching_tag": "실외", "indoor": -3.8, "outdoor": 2.6},
+    "start_proximity_score": {
+        "도보 중심": {
+            "ranges": [
+                {"max_km": 1.5, "score": 4.5},
+                {"max_km": 3.0, "score": 3.0},
+                {"max_km": 5.0, "score": 1.0},
+                {"max_km": 8.0, "score": -2.0},
+            ],
+            "fallback_multiplier": -0.55,
+            "fallback_min_score": -10.0,
+        },
+        "default": {
+            "ranges": [
+                {"max_km": 3.0, "score": 2.2},
+                {"max_km": 7.0, "score": 1.4},
+                {"max_km": 12.0, "score": 0.7},
+                {"max_km": 20.0, "score": 0.0},
+            ],
+            "fallback_multiplier": -0.12,
+            "fallback_min_score": -4.0,
+        },
+    },
+    "penalties": {
+        "budget_penalty": 8.0,
+        "repeated_cafe_name_penalty": 4.0,
+        "repeated_cafe_bathhouse_penalty": 3.0,
+        "overused_chungbuk_place_penalty": 5.0,
+        "pet_care_penalty": 20.0,
+    },
+    "agent_score_formula": {
+        "quality_cap": 6.0,
+        "quality_weight": 0.35,
+        "matched_tag_weight": 2.0,
+    },
+    "intent_adjustment_score": [
+        {
+            "intent": "wants_family",
+            "category_any": ["공원", "관광지", "박물관", "카페", "동물체험"],
+            "tag_any": ["산책", "자연", "동물", "실내"],
+            "score": 2.4,
+        },
+        {"intent": "wants_family", "role_any": ["meal", "cafe"], "score": 0.8},
+        {
+            "intent": "needs_quiet",
+            "tag_any": ["산책", "자연"],
+            "category_any": ["공원", "박물관", "관광지"],
+            "score": 2.0,
+        },
+        {
+            "intent": "needs_quiet",
+            "category_any": ["상권", "시장", "카페거리"],
+            "text_any": ["번화가", "중심가", "핫플"],
+            "score": -2.0,
+        },
+        {
+            "intent": "prefer_tourism_over_food",
+            "role_any": ["walk", "activity"],
+            "category_any": ["관광지", "공원", "박물관", "동물체험"],
+            "score": 3.2,
+        },
+        {"intent": "prefer_tourism_over_food", "role_any": ["meal"], "score": -2.8},
+        {
+            "intent": "needs_short_route",
+            "distance_ranges": [
+                {"max_km": 2.0, "score": 3.0},
+                {"max_km": 5.0, "score": 1.4},
+            ],
+            "fallback_multiplier": -0.35,
+            "fallback_min_score": -6.0,
+        },
+    ],
+    "slot_label_bonus_rules": [
+        {"label_terms": ["동물", "동물체험"], "place_terms": ["동물", "동물원", "체험"], "score": 10.0},
+        {"label_terms": ["노래방"], "place_terms": ["노래방", "노래연습", "코인노래"], "score": 10.0},
+        {"label_terms": ["PC방"], "place_terms": ["PC방", "피시방", "게임방"], "score": 10.0},
+        {"label_terms": ["보드게임"], "place_terms": ["보드게임"], "score": 10.0},
+        {"label_terms": ["볼링"], "place_terms": ["볼링"], "score": 10.0},
+        {"label_terms": ["방탈출"], "place_terms": ["방탈출"], "score": 10.0},
+        {"label_terms": ["영화관"], "place_terms": ["영화관", "CGV", "롯데시네마", "메가박스"], "score": 10.0},
+        {"label_terms": ["전시", "박물관", "미술관", "역사", "문화"], "place_terms": ["박물관", "미술관", "전시", "문화", "역사"], "score": 8.0},
+        {"label_terms": ["쇼핑", "상권", "시장"], "place_terms": ["시장", "상권", "거리", "쇼핑", "백화점", "몰"], "score": 8.0},
+        {"label_terms": ["산책", "자연", "공원", "야외"], "place_terms": ["공원", "산책", "자연", "호수", "수목원", "무심천"], "score": 7.0},
+        {"label_terms": ["사진", "포토", "인생샷", "야경"], "place_terms": ["사진", "포토", "야경", "전망", "공원", "거리", "카페"], "score": 6.0},
+        {"label_terms": ["데이트", "감성"], "place_terms": ["카페", "공원", "거리", "사진", "맛집", "디저트"], "score": 5.0},
+        {"label_terms": ["부모님", "가족", "어른", "아이"], "place_terms": ["공원", "박물관", "카페", "식당", "한식", "동물"], "score": 5.0},
+        {"label_terms": ["조용", "한적", "힐링"], "place_terms": ["공원", "카페", "산책", "자연"], "score": 5.0},
+        {"label_terms": ["인기", "핫플", "유명"], "source_equals": "카카오 Local API", "score": 4.0},
+        {"label_terms": ["가성비", "혼밥"], "cost_lte": 10000, "score": 4.0},
+    ],
+}
+DEFAULT_OUTPUT_TEMPLATES = {
+    "reason": {
+        "with_slot": "{slot} 슬롯에 맞춰 선택했고, {matched} 선호와 맞는 {weather_note} 장소입니다.",
+        "default": "{matched} 선호와 맞고, {weather_note} 일정으로 활용하기 좋습니다.",
+        "matched_default": "거리/예산",
+        "indoor_note": "실내",
+        "outdoor_note": "야외",
+    },
+    "tool_decision": {
+        "input_validation": "사용자 입력의 출발지, 예산, 이동수단, 여행 기간, 자연어 요청을 검증했습니다.",
+        "privacy": "전화번호나 이메일 등 개인정보 형식은 제거하도록 처리했습니다.",
+        "memory_used": "세션 메모리의 최근 대화 맥락을 참고했습니다.",
+        "memory_unused": "이전 대화 맥락을 이어받는 요청이 아니어서 메모리 병합을 사용하지 않았습니다.",
+        "intent_analysis": "자연어 요청과 선택 키워드를 태그, 필수 조건, 회피 조건으로 분석했습니다.",
+        "rag": "장소 DB/RAG 문서를 검색해 후보 점수와 근거에 반영했습니다.",
+        "tavily_used": "외부 리뷰/후기 근거를 검색해 후보 점수에 반영했습니다.",
+        "tavily_skipped": "외부 리뷰 근거가 필수 조건이 아니거나 API 키가 없어 생략했습니다.",
+        "tavily_failed": "외부 리뷰 검색을 시도했지만 실패해 로컬 점수를 유지했습니다.",
+        "llm_route_used": "LLM이 후보를 비교해 일정 순서를 선택했습니다.",
+        "llm_route_failed": "LLM 동선 선택 실패 또는 빈 결과를 보완하기 위해 규칙 기반 추천을 사용했습니다.",
+        "fallback_used": "품질 검사 또는 LLM 실패를 보완하기 위해 규칙 기반 추천을 사용했습니다.",
+        "fallback_unused": "LLM/tool 기반 후보 선택이 성공하여 규칙 기반 fallback은 사용하지 않았습니다.",
+        "distance": "최종 추천 전 장소 간 거리와 이동 시간을 계산했습니다.",
+        "odsay_used": "대중교통 이동 구간에서 ODSay 경로 후보를 반영했습니다.",
+        "odsay_failed": "대중교통 경로를 시도했지만 경로가 없거나 API 오류로 상세 후보를 반영하지 못했습니다.",
+        "odsay_skipped": "도보 가능 구간이거나 도보 중심 조건이라 대중교통 상세 검색을 생략했습니다.",
+        "output_parser": "최종 응답을 TripPlan Pydantic 구조로 검증했습니다.",
+    },
+    "middleware_decision": {
+        "input_validation": "사용자 입력의 출발지, 예산, 이동수단, 여행 기간, 자연어 요청을 검증했습니다.",
+        "privacy_used": "사용자 입력에서 전화번호 또는 이메일 형식을 감지해 제거했습니다.",
+        "privacy_unused": "전화번호나 이메일 형식이 없어 제거할 개인정보가 없었습니다.",
+        "memory_used": "이전 대화 {memory_turns}턴을 참고해 현재 요청과 병합했습니다.",
+        "memory_unused": "이전 대화 맥락을 이어받는 요청이 아니어서 메모리 병합을 사용하지 않았습니다.",
+    },
+    "fast_final_comment": "{transport} 이동과 자연어 요청을 기준으로 {route_preview} 순서가 가장 무난합니다. 예상 비용은 {total_cost:,}원, 이동은 약 {total_move_minutes}분/{total_distance}km입니다.",
+}
+SCORE_RULES = APP_CONFIG.get("score_rules", DEFAULT_SCORE_RULES)
+SCORE_PENALTIES = SCORE_RULES["penalties"]
+AGENT_SCORE_FORMULA = SCORE_RULES["agent_score_formula"]
+OUTPUT_TEMPLATES = APP_CONFIG.get("output_templates", DEFAULT_OUTPUT_TEMPLATES)
 
 
 def http_get(
@@ -550,7 +687,7 @@ def pet_care_penalty(place: dict[str, Any], tags: list[str]) -> float:
     if "동물먹이" not in tags:
         return 0.0
     if is_pet_care_place(place):
-        return 20.0
+        return float(SCORE_PENALTIES["pet_care_penalty"])
     return 0.0
 
 
@@ -781,7 +918,6 @@ def sync_place_db() -> list[dict[str, Any]]:
     collected: list[dict[str, Any]] = []
     source_counts: dict[str, int] = {}
     fetchers = (
-        ("충청북도 관광명소정보 API", fetch_chungbuk_places),
         ("카카오 Local API", fetch_kakao_places),
     )
     for source, fetcher in fetchers:
@@ -802,20 +938,6 @@ def sync_place_db() -> list[dict[str, Any]]:
 
     raise RuntimeError("청주 장소 데이터를 수집하지 못했습니다. " + " / ".join(errors))
 
-
-def fetch_chungbuk_places() -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    page_unit = 100
-    for page_index in range(1, 6):
-        raw = http_get(
-            CHUNGBUK_TOUR_API_URL,
-            {"pageUnit": str(page_unit), "pageIndex": str(page_index)},
-        )
-        page_items = deep_find_items(parse_api_payload(raw))
-        items.extend(page_items)
-        if len(page_items) < page_unit:
-            break
-    return [place for item in items if (place := normalize_place(item, "충청북도 관광명소정보 API"))]
 
 
 def fetch_kakao_places() -> list[dict[str, Any]]:
@@ -848,6 +970,48 @@ def fetch_kakao_places() -> list[dict[str, Any]]:
             if meta.get("is_end", True):
                 break
     return places
+
+
+def infer_kakao_search_roles(query: str) -> list[str]:
+    role_scores = {
+        "meal": sum(1 for term in MEAL_EVIDENCE_TERMS if term in query),
+        "cafe": sum(1 for term in CAFE_EVIDENCE_TERMS if term in query),
+        "activity": sum(1 for term in ACTIVITY_EVIDENCE_TERMS + ANIMAL_EVIDENCE_TERMS if term in query),
+    }
+    ranked_roles = [role for role, score in sorted(role_scores.items(), key=lambda item: item[1], reverse=True) if score]
+    return ranked_roles or ["activity", "cafe", "meal"]
+
+
+def search_kakao_places_by_query(query: str) -> list[dict[str, Any]]:
+    if not KAKAO_REST_API_KEY:
+        return []
+
+    kakao_key = KAKAO_REST_API_KEY.strip()
+    authorization = kakao_key if kakao_key.startswith("KakaoAK ") else f"KakaoAK {kakao_key}"
+    headers = {"Authorization": authorization}
+    places: list[dict[str, Any]] = []
+    for page in range(1, 3):
+        raw = http_get(
+            KAKAO_LOCAL_API_URL,
+            {
+                "query": query,
+                "size": "15",
+                "page": str(page),
+            },
+            headers=headers,
+        )
+        payload = parse_api_payload(raw)
+        documents = payload.get("documents", []) if isinstance(payload, dict) else []
+        for item in documents:
+            for role in infer_kakao_search_roles(query):
+                place = normalize_kakao_place(item, query, role)
+                if place:
+                    places.append(place)
+                    break
+        meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
+        if meta.get("is_end", True):
+            break
+    return dedupe_places(places)
 
 
 def transit_cache_key(start: dict[str, float], end: dict[str, float]) -> str:
@@ -997,29 +1161,6 @@ class AgentState(TypedDict):
     tags: list[str]
     warnings: list[str]
     memory_context: list[dict[str, Any]]
-
-
-class AgentGraphState(TypedDict, total=False):
-    payload: dict[str, Any]
-    state: AgentState
-    errors: list[str]
-    status: int
-    tags: list[str]
-    intent: dict[str, Any]
-    intent_mode: str
-    slots: list[dict[str, Any]]
-    candidates: list[dict[str, Any]]
-    retrieved_documents: list[dict[str, Any]]
-    recommended: list[dict[str, Any]]
-    planner_mode: str
-    planner_decision: dict[str, Any]
-    retry_count: int
-    quality_status: str
-    quality_route: str
-    quality_reasons: list[str]
-    tool_events: list[str]
-    legs: list[dict[str, Any]]
-    result: dict[str, Any]
 
 
 class TravelIntent(BaseModel):
@@ -1460,48 +1601,34 @@ def llm_intent_tool(state: AgentState) -> tuple[list[str], dict[str, Any], str]:
 
 
 def weather_filter_score(place: dict[str, Any], weather: str) -> float:
-    if weather == "비":
-        return 2.4 if place["indoor"] else -3.0
-    if weather == "더움":
-        return 1.0 if place["indoor"] else -0.3
-    if weather == "추움":
-        return 1.2 if place["indoor"] else -0.5
-    return 0.4 if not place["indoor"] else 0.0
+    rule = SCORE_RULES["weather_filter_score"].get(weather, SCORE_RULES["weather_filter_score"]["default"])
+    key = "indoor" if place["indoor"] else "outdoor"
+    return float(rule[key])
 
 
 def indoor_preference_score(place: dict[str, Any], tags: list[str]) -> float:
-    if "실내" not in tags:
+    rule = SCORE_RULES["indoor_preference_score"]
+    if rule["matching_tag"] not in tags:
         return 0
-    return 3.0 if place["indoor"] else -5.0
+    return float(rule["indoor"] if place["indoor"] else rule["outdoor"])
 
 
 def outdoor_preference_score(place: dict[str, Any], tags: list[str]) -> float:
-    if "실외" not in tags:
+    rule = SCORE_RULES["outdoor_preference_score"]
+    if rule["matching_tag"] not in tags:
         return 0
-    return 2.6 if not place["indoor"] else -3.8
+    return float(rule["indoor"] if place["indoor"] else rule["outdoor"])
 
 
 def start_proximity_score(distance_km: float, transport: str) -> float:
-    if transport == "도보 중심":
-        if distance_km <= 1.5:
-            return 4.5
-        if distance_km <= 3:
-            return 3.0
-        if distance_km <= 5:
-            return 1.0
-        if distance_km <= 8:
-            return -2.0
-        return max(-10.0, -distance_km * 0.55)
-
-    if distance_km <= 3:
-        return 2.2
-    if distance_km <= 7:
-        return 1.4
-    if distance_km <= 12:
-        return 0.7
-    if distance_km <= 20:
-        return 0
-    return max(-4.0, -distance_km * 0.12)
+    rule = SCORE_RULES["start_proximity_score"].get(
+        transport,
+        SCORE_RULES["start_proximity_score"]["default"],
+    )
+    for range_rule in rule["ranges"]:
+        if distance_km <= float(range_rule["max_km"]):
+            return float(range_rule["score"])
+    return max(float(rule["fallback_min_score"]), distance_km * float(rule["fallback_multiplier"]))
 
 
 CATEGORY_SCORE_RULES = APP_CONFIG["category_score_rules"]
@@ -1545,6 +1672,19 @@ def category_preference_score(place: dict[str, Any], tags: list[str]) -> float:
     return score
 
 
+def intent_rule_matches(rule: dict[str, Any], category: str, role: str, tags: set[str], text: str) -> bool:
+    checks: list[bool] = []
+    if rule.get("category_any"):
+        checks.append(category in set(rule["category_any"]))
+    if rule.get("role_any"):
+        checks.append(role in set(rule["role_any"]))
+    if rule.get("tag_any"):
+        checks.append(bool(tags.intersection(rule["tag_any"])))
+    if rule.get("text_any"):
+        checks.append(any(word in text for word in rule["text_any"]))
+    return any(checks) if checks else True
+
+
 def intent_adjustment_score(place: dict[str, Any], intent: dict[str, Any], distance_km: float = 0.0) -> float:
     score = 0.0
     category = str(place.get("category", ""))
@@ -1552,45 +1692,36 @@ def intent_adjustment_score(place: dict[str, Any], intent: dict[str, Any], dista
     tags = set(place.get("tags", []))
     text = f"{place.get('name', '')} {category} {' '.join(tags)} {place.get('address', '')}"
 
-    if intent.get("wants_family"):
-        if category in {"공원", "관광지", "박물관", "카페", "동물체험"} or tags.intersection({"산책", "자연", "동물", "실내"}):
-            score += 2.4
-        if role in {"meal", "cafe"}:
-            score += 0.8
-
-    if intent.get("needs_quiet"):
-        if tags.intersection({"산책", "자연"}) or category in {"공원", "박물관", "관광지"}:
-            score += 2.0
-        if category in {"상권", "시장", "카페거리"} or any(word in text for word in ("번화가", "중심가", "핫플")):
-            score -= 2.0
-
-    if intent.get("prefer_tourism_over_food"):
-        if role in {"walk", "activity"} or category in {"관광지", "공원", "박물관", "동물체험"}:
-            score += 3.2
-        if role == "meal":
-            score -= 2.8
-
-    if intent.get("needs_short_route"):
-        if distance_km <= 2:
-            score += 3.0
-        elif distance_km <= 5:
-            score += 1.4
-        else:
-            score -= min(6.0, distance_km * 0.35)
+    for rule in SCORE_RULES["intent_adjustment_score"]:
+        if not intent.get(rule["intent"]):
+            continue
+        if rule.get("distance_ranges"):
+            for distance_rule in rule["distance_ranges"]:
+                if distance_km <= float(distance_rule["max_km"]):
+                    score += float(distance_rule["score"])
+                    break
+            else:
+                score += max(
+                    float(rule["fallback_min_score"]),
+                    distance_km * float(rule["fallback_multiplier"]),
+                )
+            continue
+        if intent_rule_matches(rule, category, role, tags, text):
+            score += float(rule["score"])
 
     return score
 
 
 def repeated_cafe_penalty(place: dict[str, Any]) -> float:
     if place["name"] in LOW_PRIORITY_REPEATED_CAFE_NAMES:
-        return 4.0
+        return float(SCORE_PENALTIES["repeated_cafe_name_penalty"])
     if "목욕탕" in place["name"] and place["category"] in {"카페", "카페거리"}:
-        return 3.0
+        return float(SCORE_PENALTIES["repeated_cafe_bathhouse_penalty"])
     return 0.0
 
 
 def overused_chungbuk_place_penalty(place: dict[str, Any]) -> float:
-    return 5.0 if place["name"] in OVERUSED_CHUNGBUK_PLACE_NAMES else 0.0
+    return float(SCORE_PENALTIES["overused_chungbuk_place_penalty"]) if place["name"] in OVERUSED_CHUNGBUK_PLACE_NAMES else 0.0
 
 
 def diversity_adjusted_selection(
@@ -1817,7 +1948,7 @@ def slot_candidate_score(
     matched_tags = sorted(set(tags).intersection(place["tags"]))
     current_distance = haversine_km(current, place)
     duplicate_category_count = sum(1 for item in selected if item["category"] == place["category"])
-    budget_penalty = 8.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
+    budget_penalty = float(SCORE_PENALTIES["budget_penalty"]) if place["cost"] > per_place_budget and place["cost"] > 0 else 0
 
     place_role = place.get("role") or place_role_for_category(place["category"])
 
@@ -1839,75 +1970,14 @@ def slot_candidate_score(
         f"{place.get('kakao_category', '')}"
     )
 
-    if any(word in slot_label for word in ["동물", "동물체험"]) and any(
-        word in place_text for word in ["동물", "동물원", "체험"]
-    ):
-        role_bonus += 10.0
-
-    if "노래방" in slot_label and any(
-        word in place_text for word in ["노래방", "노래연습", "코인노래"]
-    ):
-        role_bonus += 10.0
-
-    if "PC방" in slot_label and any(
-        word in place_text for word in ["PC방", "피시방", "게임방"]
-    ):
-        role_bonus += 10.0
-
-    if "보드게임" in slot_label and "보드게임" in place_text:
-        role_bonus += 10.0
-
-    if "볼링" in slot_label and "볼링" in place_text:
-        role_bonus += 10.0
-
-    if "방탈출" in slot_label and "방탈출" in place_text:
-        role_bonus += 10.0
-
-    if "영화관" in slot_label and any(
-        word in place_text for word in ["영화관", "CGV", "롯데시네마", "메가박스"]
-    ):
-        role_bonus += 10.0
-
-    if any(word in slot_label for word in ["전시", "박물관", "미술관", "역사", "문화"]) and any(
-        word in place_text for word in ["박물관", "미술관", "전시", "문화", "역사"]
-    ):
-        role_bonus += 8.0
-
-    if any(word in slot_label for word in ["쇼핑", "상권", "시장"]) and any(
-        word in place_text for word in ["시장", "상권", "거리", "쇼핑", "백화점", "몰"]
-    ):
-        role_bonus += 8.0
-
-    if any(word in slot_label for word in ["산책", "자연", "공원", "야외"]) and any(
-        word in place_text for word in ["공원", "산책", "자연", "호수", "수목원", "무심천"]
-    ):
-        role_bonus += 7.0
-
-    if any(word in slot_label for word in ["사진", "포토", "인생샷", "야경"]) and any(
-        word in place_text for word in ["사진", "포토", "야경", "전망", "공원", "거리", "카페"]
-    ):
-        role_bonus += 6.0
-
-    if any(word in slot_label for word in ["데이트", "감성"]) and any(
-        word in place_text for word in ["카페", "공원", "거리", "사진", "맛집", "디저트"]
-    ):
-        role_bonus += 5.0
-
-    if any(word in slot_label for word in ["부모님", "가족", "어른", "아이"]) and any(
-        word in place_text for word in ["공원", "박물관", "카페", "식당", "한식", "동물"]
-    ):
-        role_bonus += 5.0
-
-    if any(word in slot_label for word in ["조용", "한적", "힐링"]) and any(
-        word in place_text for word in ["공원", "카페", "산책", "자연"]
-    ):
-        role_bonus += 5.0
-
-    if any(word in slot_label for word in ["인기", "핫플", "유명"]) and place.get("source") == "카카오 Local API":
-        role_bonus += 4.0
-
-    if any(word in slot_label for word in ["가성비", "혼밥"]) and place.get("cost", 0) <= 10000:
-        role_bonus += 4.0
+    for rule in SCORE_RULES["slot_label_bonus_rules"]:
+        if not any(word in slot_label for word in rule["label_terms"]):
+            continue
+        place_matches = not rule.get("place_terms") or any(word in place_text for word in rule["place_terms"])
+        source_matches = not rule.get("source_equals") or place.get("source") == rule["source_equals"]
+        cost_matches = not rule.get("cost_lte") or place.get("cost", 0) <= int(rule["cost_lte"])
+        if place_matches and source_matches and cost_matches:
+            role_bonus += float(rule["score"])
 
     return (
         place["score"]
@@ -2005,6 +2075,42 @@ def select_place_for_slot(
     }
 
 
+def calculate_agent_score(
+    place: dict[str, Any],
+    tags: list[str],
+    weather: str,
+    transport: str,
+    per_place_budget: float,
+    start_distance: float,
+    intent: dict[str, Any] | None = None,
+    matched_tags: list[str] | None = None,
+    quality: float | None = None,
+) -> float:
+    matched_tags = matched_tags if matched_tags is not None else sorted(set(tags).intersection(place["tags"]))
+    quality = float(quality if quality is not None else place.get("quality_score") or place_quality_score(place))
+    budget_penalty = (
+        float(SCORE_PENALTIES["budget_penalty"])
+        if place["cost"] > per_place_budget and place["cost"] > 0
+        else 0.0
+    )
+    return (
+        place["score"]
+        + min(quality, float(AGENT_SCORE_FORMULA["quality_cap"])) * float(AGENT_SCORE_FORMULA["quality_weight"])
+        + len(matched_tags) * float(AGENT_SCORE_FORMULA["matched_tag_weight"])
+        + weather_filter_score(place, weather)
+        + indoor_preference_score(place, tags)
+        + outdoor_preference_score(place, tags)
+        + category_preference_score(place, tags)
+        + start_proximity_score(start_distance, transport)
+        + intent_adjustment_score(place, intent or {}, start_distance)
+        + float(place.get("review_boost", 0))
+        - budget_penalty
+        - repeated_cafe_penalty(place)
+        - overused_chungbuk_place_penalty(place)
+        - pet_care_penalty(place, tags)
+    )
+
+
 def recommendation_tool(
     tags: list[str],
     budget: int,
@@ -2038,23 +2144,17 @@ def recommendation_tool(
         if quality < MIN_RECOMMENDATION_QUALITY:
             continue
         matched_tags = sorted(set(tags).intersection(place["tags"]))
-        budget_penalty = 8.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
         start_distance = haversine_km(start_point, place)
-        score = (
-            place["score"]
-            + min(quality, 6.0) * 0.35
-            + len(matched_tags) * 2
-            + weather_filter_score(place, weather)
-            + indoor_preference_score(place, tags)
-            + outdoor_preference_score(place, tags)
-            + category_preference_score(place, tags)
-            + start_proximity_score(start_distance, transport)
-            + intent_adjustment_score(place, intent or {}, start_distance)
-            + float(place.get("review_boost", 0))
-            - budget_penalty
-            - repeated_cafe_penalty(place)
-            - overused_chungbuk_place_penalty(place)
-            - pet_care_penalty(place, tags)
+        score = calculate_agent_score(
+            place=place,
+            tags=tags,
+            weather=weather,
+            transport=transport,
+            per_place_budget=per_place_budget,
+            start_distance=start_distance,
+            intent=intent,
+            matched_tags=matched_tags,
+            quality=quality,
         )
         places.append(
             {
@@ -2170,22 +2270,16 @@ def candidate_lookup_tool(
 
         matched_tags = sorted(set(tags).intersection(place["tags"]))
         start_distance = haversine_km(state["start_point"], place)
-        budget_penalty = 8.0 if place["cost"] > per_place_budget and place["cost"] > 0 else 0
-        score = (
-            place["score"]
-            + min(quality, 6.0) * 0.35
-            + len(matched_tags) * 2
-            + weather_filter_score(place, state["weather"])
-            + indoor_preference_score(place, tags)
-            + outdoor_preference_score(place, tags)
-            + category_preference_score(place, tags)
-            + start_proximity_score(start_distance, state["transport"])
-            + intent_adjustment_score(place, intent or {}, start_distance)
-            + float(place.get("review_boost", 0))
-            - budget_penalty
-            - repeated_cafe_penalty(place)
-            - overused_chungbuk_place_penalty(place)
-            - pet_care_penalty(place, tags)
+        score = calculate_agent_score(
+            place=place,
+            tags=tags,
+            weather=state["weather"],
+            transport=state["transport"],
+            per_place_budget=per_place_budget,
+            start_distance=start_distance,
+            intent=intent,
+            matched_tags=matched_tags,
+            quality=quality,
         )
         places.append(
             {
@@ -2829,19 +2923,449 @@ def distance_tool(
     return legs
 
 
-def langchain_place_search(query: str) -> str:
-    """청주 로컬 장소 DB에서 사용자 요청과 관련된 RAG 문서를 검색합니다."""
-    return json.dumps(retrieve_relevant_place_documents(query, max_documents=8), ensure_ascii=False)
+def json_dumps_for_query(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        return str(value)
 
 
-def langchain_distance_summary(route_json: str) -> str:
-    """장소 목록 JSON을 받아 순서대로 거리와 이동 시간을 계산합니다."""
-    route = json.loads(route_json)
-    legs = distance_tool(START_POINTS["충북대"], route, "대중교통", "당일치기")
-    return json.dumps(legs, ensure_ascii=False)
+def parse_json_argument(raw: str | dict[str, Any] | list[Any]) -> Any:
+    if isinstance(raw, (dict, list)):
+        return raw
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    return json.loads(text)
 
 
-LANGCHAIN_TOOLS = [tool(langchain_place_search), tool(langchain_distance_summary)] if tool else []
+def state_from_tool_input(input_json: str | dict[str, Any]) -> tuple[AgentState | None, list[str]]:
+    payload = parse_json_argument(input_json)
+    if not isinstance(payload, dict):
+        return None, ["JSON 객체를 입력해야 합니다."]
+
+    if {"style_text", "start_point", "budget", "transport", "duration", "weather"}.issubset(payload.keys()):
+        state = dict(payload)
+        state.setdefault("session_id", normalize_session_id(state.get("session_id")))
+        state.setdefault("start_name", "충북대")
+        state.setdefault("selected_keywords", [])
+        state.setdefault("tags", [])
+        state.setdefault("warnings", [])
+        state.setdefault("memory_context", [])
+        return state, []
+
+    if isinstance(payload.get("payload"), dict):
+        payload = payload["payload"]
+    return validate_and_normalize(payload)
+
+
+def quality_reasons_for_route(
+    recommended: list[dict[str, Any]],
+    slots: list[dict[str, Any]],
+) -> list[str]:
+    required_roles = {slot.get("role") for slot in slots if slot.get("role")}
+    selected_roles = {
+        place.get("slot_role") or place.get("role")
+        for place in recommended
+        if place.get("slot_role") or place.get("role")
+    }
+    missing_roles = sorted(required_roles - selected_roles)
+    target_count = min(len(slots), 5) if slots else 3
+    average_quality = (
+        sum(float(place.get("quality_score") or place.get("score") or 0) for place in recommended) / len(recommended)
+        if recommended
+        else 0
+    )
+    reasons: list[str] = []
+    if not recommended:
+        reasons.append("LLM이 추천 장소를 선택하지 못했습니다.")
+    if len(recommended) < max(1, target_count - 1):
+        reasons.append(f"추천 장소 수가 부족합니다. selected={len(recommended)}, target={target_count}")
+    if missing_roles:
+        reasons.append(f"일정 구성에 필요한 role이 부족합니다: {', '.join(missing_roles)}")
+    if recommended and average_quality < 3.2:
+        reasons.append(f"추천 평균 품질 점수가 낮습니다: {average_quality:.2f}")
+    return reasons
+
+
+def select_trip_candidates_core(
+    state: AgentState,
+    tags: list[str] | None = None,
+    intent: dict[str, Any] | None = None,
+    retry_count: int = 0,
+) -> dict[str, Any]:
+    if tags is None or intent is None:
+        tags, intent, intent_mode = llm_intent_tool(state)
+    else:
+        intent_mode = "Tool 입력 의도 사용"
+    state["tags"] = tags
+
+    try:
+        slots, candidates = candidate_lookup_tool(
+            state,
+            tags,
+            intent,
+            max_candidates=72 if retry_count else 48,
+        )
+    except RuntimeError as error:
+        raise RuntimeError(
+            f"{error} 장소 데이터를 사용하려면 KAKAO_REST_API_KEY를 설정하거나 /api/places/sync로 장소 캐시를 다시 생성하세요."
+        ) from error
+
+    tool_events: list[str] = [intent_mode]
+    candidates, review_events = tavily_review_boost_tool(state, intent, candidates)
+    tool_events.extend(review_events)
+
+    user_query = " ".join([state["style_text"], " ".join(tags), json_dumps_for_query(intent)])
+    vector_documents = retrieve_relevant_place_documents(user_query, max_documents=10 if retry_count else 8)
+    vector_names = {
+        str(document.get("metadata", {}).get("name"))
+        for document in vector_documents
+        if document.get("metadata", {}).get("name")
+    }
+    if vector_names:
+        for candidate in candidates:
+            if candidate.get("name") in vector_names:
+                candidate["agent_score"] = round(float(candidate.get("agent_score", 0)) + 1.5, 2)
+        candidates.sort(key=lambda item: float(item.get("agent_score", 0)), reverse=True)
+        tool_events.append(f"FAISS VectorStore RAG Retriever: 관련 장소 문서 {len(vector_documents)}개를 후보 점수에 반영")
+    else:
+        tool_events.append("FAISS VectorStore RAG Retriever: 관련 문서 없음 또는 임베딩 backend 없음")
+
+    recommended, planner_mode, planner_decision = llm_route_planner_tool(
+        state,
+        tags,
+        intent,
+        slots,
+        candidates,
+        vector_documents + candidate_documents_to_context(candidates),
+    )
+    quality_reasons = quality_reasons_for_route(recommended, slots)
+    if quality_reasons:
+        state["warnings"].append("추천 품질 검사: " + " / ".join(quality_reasons))
+        excluded_place_names = used_place_names_from_memory(state.get("memory_context", []))
+        excluded_place_names.discard(state["start_name"])
+        recommended = recommendation_tool(
+            tags,
+            state["budget"],
+            state["weather"],
+            state["duration"],
+            state["start_point"],
+            state["transport"],
+            excluded_place_names,
+            intent,
+        )
+        planner_mode = planner_mode if recommended and "Fallback" not in planner_mode else "규칙 기반 Fallback"
+        planner_decision = {
+            "decision_summary": "품질 검사 결과를 반영해 규칙 기반 후보 생성/점수화 결과로 보정했습니다.",
+            **(planner_decision or {}),
+        }
+
+    constrained = enforce_day_trip_constraints(state, recommended, candidates, intent)
+    if constrained != recommended:
+        state["warnings"].append("당일치기 제약에 맞춰 예산 초과 또는 도보 15분 초과 후보를 제외했습니다.")
+    recommended = constrained
+    append_missing_keyword_warnings(state, recommended)
+
+    return {
+        "state": state,
+        "tags": tags,
+        "intent": intent,
+        "slots": slots,
+        "candidates": candidates,
+        "recommended": recommended,
+        "planner_mode": planner_mode,
+        "planner_decision": planner_decision,
+        "retrieved_documents": vector_documents + candidate_documents_to_context(candidates),
+        "tool_events": tool_events,
+        "quality_reasons": quality_reasons,
+    }
+
+
+if tool:
+    @tool
+    def analyze_travel_intent(input_json: str) -> str:
+        """사용자 여행 요청 JSON을 분석해 tags, must_have, avoid, pace, needs_external_review 등을 반환한다."""
+        state, errors = state_from_tool_input(input_json)
+        if errors or state is None:
+            return json.dumps({"errors": errors}, ensure_ascii=False)
+        tags, intent, mode = llm_intent_tool(state)
+        return json.dumps({"tags": tags, **intent, "mode": mode}, ensure_ascii=False)
+
+
+    @tool
+    def rag_place_retriever(query: str) -> str:
+        """청주 장소 DB를 FAISS VectorStore RAG로 검색한다."""
+        documents = retrieve_relevant_place_documents(query, max_documents=8)
+        return json.dumps(documents, ensure_ascii=False)
+
+
+    @tool
+    def kakao_place_search(query: str) -> str:
+        """카카오 Local API로 청주 장소 후보를 검색한다."""
+        if not KAKAO_REST_API_KEY:
+            return "KAKAO_REST_API_KEY 없음"
+        places = search_kakao_places_by_query(query)
+        return json.dumps(places[:10], ensure_ascii=False)
+
+
+    @tool
+    def tavily_review_search(query: str) -> str:
+        """장소의 리뷰, 후기, 인기 근거를 Tavily Search로 검색한다."""
+        if not TAVILY_API_KEY:
+            return "TAVILY_API_KEY 없음"
+        results = tavily_search(query, max_results=4)
+        return json.dumps(results, ensure_ascii=False)
+
+
+    @tool
+    def select_trip_candidates(state_json: str) -> str:
+        """후보 생성, 점수화, 리뷰 보정, 당일치기 제약 필터링을 수행해 추천 코스 후보를 반환한다."""
+        payload = parse_json_argument(state_json)
+        if not isinstance(payload, dict):
+            return json.dumps({"errors": ["JSON 객체를 입력해야 합니다."]}, ensure_ascii=False)
+        state, errors = state_from_tool_input(payload.get("state") or payload.get("payload") or payload)
+        if errors or state is None:
+            return json.dumps({"errors": errors}, ensure_ascii=False)
+        tags = payload.get("tags")
+        intent = payload.get("intent")
+        retry_count = int(payload.get("retry_count") or 0)
+        try:
+            result = select_trip_candidates_core(
+                state,
+                tags=[str(tag) for tag in tags] if isinstance(tags, list) else None,
+                intent=intent if isinstance(intent, dict) else None,
+                retry_count=retry_count,
+            )
+        except RuntimeError as error:
+            return json.dumps({"errors": [str(error)]}, ensure_ascii=False)
+        compact = {
+            key: result[key]
+            for key in [
+                "tags",
+                "intent",
+                "slots",
+                "candidates",
+                "recommended",
+                "planner_mode",
+                "planner_decision",
+                "tool_events",
+                "quality_reasons",
+            ]
+        }
+        compact["warnings"] = result["state"].get("warnings", [])
+        return json.dumps(compact, ensure_ascii=False)
+
+
+    @tool
+    def odsay_transit_route(route_json: str) -> str:
+        """장소 간 대중교통 경로를 ODSay API로 확인한다."""
+        payload = parse_json_argument(route_json)
+        route = payload.get("route") if isinstance(payload, dict) else payload
+        start_point = payload.get("start_point", START_POINTS["충북대"]) if isinstance(payload, dict) else START_POINTS["충북대"]
+        duration = payload.get("duration", "당일치기") if isinstance(payload, dict) else "당일치기"
+        legs = distance_tool(start_point, route, "대중교통", duration)
+        return json.dumps(legs, ensure_ascii=False)
+
+
+    @tool
+    def calculate_route_distance(route_json: str) -> str:
+        """장소 목록의 거리와 이동 시간을 계산한다."""
+        payload = parse_json_argument(route_json)
+        route = payload.get("route") if isinstance(payload, dict) else payload
+        start_point = payload.get("start_point", START_POINTS["충북대"]) if isinstance(payload, dict) else START_POINTS["충북대"]
+        transport = payload.get("transport", "대중교통") if isinstance(payload, dict) else "대중교통"
+        duration = payload.get("duration", "당일치기") if isinstance(payload, dict) else "당일치기"
+        legs = distance_tool(start_point, route, transport, duration)
+        return json.dumps(legs, ensure_ascii=False)
+else:
+    analyze_travel_intent = None
+    rag_place_retriever = None
+    kakao_place_search = None
+    tavily_review_search = None
+    select_trip_candidates = None
+    odsay_transit_route = None
+    calculate_route_distance = None
+
+
+AGENT_TOOLS = [
+    candidate
+    for candidate in [
+        analyze_travel_intent,
+        rag_place_retriever,
+        kakao_place_search,
+        tavily_review_search,
+        select_trip_candidates,
+        calculate_route_distance,
+        odsay_transit_route,
+    ]
+    if candidate is not None
+]
+
+
+def build_tool_agent():
+    if ChatOpenAI is None or create_react_agent is None or not AGENT_TOOLS or not os.getenv("OPENAI_API_KEY"):
+        return None
+
+    llm = ChatOpenAI(
+        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        temperature=0,
+        timeout=25,
+    )
+
+    system_prompt = (
+        "당신은 청주 여행 추천 TOOL_AGENT입니다. "
+        "반드시 @tool로 제공된 도구를 직접 선택해 의도 분석, 후보 검색/생성, 리뷰 근거 확인, 거리 계산을 수행하세요. "
+        "최종 추천 전에는 반드시 calculate_route_distance tool을 실행해야 합니다. "
+        "최종 답변은 설명 문장 없이 TripPlan 스키마에 맞는 JSON 객체 하나만 출력하세요."
+    )
+    kwargs = {
+        "model": llm,
+        "tools": AGENT_TOOLS,
+    }
+    if SystemMessage is not None:
+        kwargs["prompt"] = SystemMessage(content=system_prompt)
+    try:
+        return create_react_agent(**kwargs)
+    except TypeError:
+        kwargs.pop("prompt", None)
+        return create_react_agent(**kwargs)
+
+
+TOOL_AGENT = build_tool_agent()
+
+
+def message_content(message: Any) -> str:
+    if isinstance(message, dict):
+        return str(message.get("content") or "")
+    return str(getattr(message, "content", "") or "")
+
+
+def message_name(message: Any) -> str:
+    if isinstance(message, dict):
+        return str(message.get("name") or "")
+    return str(getattr(message, "name", "") or "")
+
+
+def message_tool_calls(message: Any) -> list[dict[str, Any]]:
+    calls = message.get("tool_calls", []) if isinstance(message, dict) else getattr(message, "tool_calls", [])
+    return calls if isinstance(calls, list) else []
+
+
+def build_tool_agent_prompt(state: AgentState, payload: dict[str, Any]) -> str:
+    return (
+        "청주 당일치기 추천을 실행하세요.\n"
+        "규칙:\n"
+        "1. analyze_travel_intent로 의도를 분석하세요.\n"
+        "2. rag_place_retriever와 필요 시 kakao_place_search/tavily_review_search를 사용하세요.\n"
+        "3. select_trip_candidates로 추천 후보 또는 코스 후보를 생성/점수화/필터링하세요.\n"
+        "4. 최종 추천 전에는 반드시 calculate_route_distance를 실행하세요.\n"
+        "5. 최종 응답은 반드시 TripPlan JSON 객체 하나만 출력하세요. Markdown, 설명, 코드블록은 금지합니다.\n"
+        f"원본 payload: {json.dumps(payload, ensure_ascii=False)}\n"
+        f"정규화된 state: {json.dumps(state, ensure_ascii=False)}\n"
+        f"출발지: {state['start_name']}\n"
+        f"이동수단: {state['transport']}\n"
+        f"날씨: {state['weather']}\n"
+        f"예산: {state['budget']}\n"
+        f"사용자 요청: {state['style_text']}\n"
+        f"TripPlan JSON 스키마 요약: {TripPlan.model_json_schema() if hasattr(TripPlan, 'model_json_schema') else 'summary, schedule, places, legs, warnings, agent_flow 포함'}"
+    )
+
+
+def extract_tool_agent_result(response: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    messages = response.get("messages", []) if isinstance(response, dict) else []
+    events: list[str] = []
+    retrieved_documents: list[dict[str, Any]] = []
+    selected_tools: list[str] = []
+
+    for message in messages:
+        for call in message_tool_calls(message):
+            name = str(call.get("name") or "")
+            if name and name not in selected_tools:
+                selected_tools.append(name)
+
+        name = message_name(message)
+        content = message_content(message)
+        if not name:
+            continue
+        if name not in selected_tools:
+            selected_tools.append(name)
+        if name == "rag_place_retriever":
+            try:
+                payload = json.loads(content)
+            except json.JSONDecodeError:
+                payload = []
+            if isinstance(payload, list):
+                retrieved_documents = [item for item in payload if isinstance(item, dict)]
+
+    for name in selected_tools:
+        events.append(f"ReAct Tool Agent 선택: {name}")
+    if retrieved_documents:
+        events.append(f"ReAct Tool Agent: RAG 문서 {len(retrieved_documents)}개를 후보 근거로 반영")
+    return retrieved_documents, events
+
+
+def extract_json_object(text: str) -> dict[str, Any] | None:
+    text = text.strip()
+    if not text:
+        return None
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def parse_tool_agent_trip_plan(response: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+    messages = response.get("messages", []) if isinstance(response, dict) else []
+    events: list[str] = []
+    for message in messages:
+        for call in message_tool_calls(message):
+            name = str(call.get("name") or "")
+            if name:
+                events.append(f"ReAct Tool Agent 선택: {name}")
+    for message in reversed(messages):
+        content = message_content(message)
+        parsed = extract_json_object(content)
+        if not parsed:
+            continue
+        try:
+            validated = TripPlan.model_validate(parsed)
+            return validated.model_dump(), events
+        except (ValidationError, ValueError) as error:
+            events.append(f"ReAct Tool Agent 최종 JSON 검증 실패: {error}")
+            return parsed, events
+    return None, events
+
+
+def run_tool_agent(state: AgentState, payload: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+    if TOOL_AGENT is None:
+        return None, ["ReAct Tool Agent: create_react_agent 사용 불가로 로컬 Tool fallback 실행"]
+    if not os.getenv("OPENAI_API_KEY"):
+        return None, ["ReAct Tool Agent: OPENAI_API_KEY 없음으로 로컬 Tool fallback 실행"]
+
+    prompt = build_tool_agent_prompt(state, payload)
+    try:
+        response = TOOL_AGENT.invoke(
+            {"messages": [("user", prompt)]},
+        )
+    except Exception as error:
+        logger.warning("ReAct tool agent failed: %s", error)
+        return None, [f"ReAct Tool Agent 실패: {error}"]
+    return parse_tool_agent_trip_plan(response)
 
 
 def build_schedule(
@@ -2883,12 +3407,13 @@ def format_time(total_minutes: int) -> str:
 def build_reason(place: dict[str, Any]) -> str:
     if place.get("llm_reason"):
         return str(place["llm_reason"])
-    matched = ", ".join(place["matched_tags"]) if place["matched_tags"] else "균형 일정"
+    templates = OUTPUT_TEMPLATES["reason"]
+    matched = ", ".join(place["matched_tags"]) if place["matched_tags"] else templates["matched_default"]
     slot = place.get("slot_label")
-    weather_note = "실내" if place["indoor"] else "야외"
+    weather_note = templates["indoor_note"] if place["indoor"] else templates["outdoor_note"]
     if slot:
-        return f"{slot} 슬롯에 맞춰 선택했고, {matched} 선호와 맞는 {weather_note} 장소입니다."
-    return f"{matched} 선호와 맞고, {weather_note} 일정으로 활용하기 좋습니다."
+        return templates["with_slot"].format(slot=slot, matched=matched, weather_note=weather_note)
+    return templates["default"].format(matched=matched, weather_note=weather_note)
 
 def build_tool_decision(
     state: AgentState,
@@ -2908,19 +3433,20 @@ def build_tool_decision(
     transit_used = any(leg.get("mode") == "transit" and leg.get("transit_options") for leg in legs)
     transit_attempted = any(leg.get("mode") == "transit" for leg in legs)
     llm_route_used = "Fallback" not in planner_mode
+    templates = OUTPUT_TEMPLATES["tool_decision"]
 
     return [
-        item("입력 검증 Middleware", True, "출발지, 예산, 이동수단, 여행 기간 입력값을 검증하기 위해 사용했습니다."),
-        item("개인정보 제거 Middleware", True, "사용자 입력에서 전화번호, 이메일 등 개인정보 형식을 제거하기 위해 사용했습니다."),
-        item("Session Memory", bool(state.get("memory_context")), "이전 대화 조건을 이어받아 멀티턴 요청을 처리했습니다." if state.get("memory_context") else "이전 대화 맥락이 없어 현재 입력만 기준으로 처리했습니다."),
-        item("자연어 의도 분석 Tool", True, "사용자의 여행 스타일 문장을 태그, 필수 조건, 회피 조건으로 변환하기 위해 사용했습니다."),
-        item("RAG 후보 검색 Tool", True, "로컬 장소 DB를 LangChain Document 형태로 변환하고 사용자 조건과 맞는 후보를 검색하기 위해 사용했습니다."),
-        item("Tavily 리뷰 근거 검색 Tool", tavily_used, "사용자가 리뷰, 평점, 인기, 최신성 근거를 요구하여 외부 검색 결과를 후보 점수에 반영했습니다." if tavily_used else "리뷰/평점/인기/최신성 조건이 없거나 API 키가 없어 외부 리뷰 검색을 생략했습니다." if tavily_skipped or not intent.get("needs_external_review") else "외부 리뷰 검색 조건은 감지되었지만 검색 결과를 반영하지 못했습니다."),
-        item("LLM 동선 선택 Tool", llm_route_used, "검색된 후보 장소와 RAG Context를 비교하여 최종 동선을 선택하기 위해 사용했습니다." if llm_route_used else "LLM 동선 선택이 실패했거나 결과가 비어 있어 사용하지 못했습니다."),
-        item("규칙 기반 Fallback Tool", not llm_route_used, "LLM 동선 선택 실패 또는 빈 결과를 보완하기 위해 규칙 기반 추천을 사용했습니다." if not llm_route_used else "LLM 동선 선택이 성공하여 Fallback은 사용하지 않았습니다."),
-        item("거리/동선 계산 Tool", True, "장소 간 거리, 이동 시간, 총 이동 거리를 계산하기 위해 사용했습니다."),
-        item("ODSay 대중교통 Tool", transit_used, "대중교통 이동 구간에서 실제 버스 경로 후보를 계산하기 위해 사용했습니다." if transit_used else "대중교통 경로를 시도했지만 경로가 없거나 API 오류로 상세 후보를 반영하지 못했습니다." if transit_attempted else "도보 가능 구간이거나 도보 중심 조건이라 대중교통 상세 검색을 생략했습니다."),
-        item("OutputParser", True, "최종 응답을 TripPlan Pydantic 구조로 검증하기 위해 사용했습니다."),
+        item("입력 검증 Middleware", True, templates["input_validation"]),
+        item("개인정보 제거 Middleware", True, templates["privacy"]),
+        item("Session Memory", bool(state.get("memory_context")), templates["memory_used"] if state.get("memory_context") else templates["memory_unused"]),
+        item("자연어 의도 분석 Tool", True, templates["intent_analysis"]),
+        item("RAG 후보 검색 Tool", True, templates["rag"]),
+        item("Tavily 리뷰 근거 검색 Tool", tavily_used, templates["tavily_used"] if tavily_used else templates["tavily_skipped"] if tavily_skipped or not intent.get("needs_external_review") else templates["tavily_failed"]),
+        item("LLM 동선 선택 Tool", llm_route_used, templates["llm_route_used"] if llm_route_used else templates["llm_route_failed"]),
+        item("규칙 기반 Fallback Tool", not llm_route_used, templates["fallback_used"] if not llm_route_used else templates["fallback_unused"]),
+        item("거리/동선 계산 Tool", True, templates["distance"]),
+        item("ODSay 대중교통 Tool", transit_used, templates["odsay_used"] if transit_used else templates["odsay_failed"] if transit_attempted else templates["odsay_skipped"]),
+        item("OutputParser", True, templates["output_parser"]),
     ]
 
 
@@ -2957,6 +3483,7 @@ def build_rag_sources(route: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def build_middleware_decision(state: AgentState) -> list[dict[str, Any]]:
     warnings = state.get("warnings", [])
     memory_context = state.get("memory_context", [])
+    templates = OUTPUT_TEMPLATES["middleware_decision"]
 
     privacy_used = any("개인정보 제거 Middleware" in warning for warning in warnings)
     memory_used = bool(memory_context)
@@ -2965,24 +3492,20 @@ def build_middleware_decision(state: AgentState) -> list[dict[str, Any]]:
         {
             "name": "입력 검증 Middleware",
             "used": True,
-            "reason": "사용자 입력의 출발지, 예산, 이동수단, 여행 기간, 자연어 요청을 검증했습니다.",
+            "reason": templates["input_validation"],
         },
         {
             "name": "개인정보 제거 Middleware",
             "used": privacy_used,
-            "reason": (
-                "사용자 입력에서 전화번호 또는 이메일 형식을 감지해 제거했습니다."
-                if privacy_used
-                else "전화번호나 이메일 형식이 없어 제거할 개인정보가 없었습니다."
-            ),
+            "reason": templates["privacy_used"] if privacy_used else templates["privacy_unused"],
         },
         {
             "name": "Session Memory 병합",
             "used": memory_used,
             "reason": (
-                f"이전 대화 {len(memory_context)}턴을 참고해 현재 요청과 병합했습니다."
+                templates["memory_used"].format(memory_turns=len(memory_context))
                 if memory_used
-                else "이전 대화 맥락을 이어받는 요청이 아니어서 메모리 병합을 사용하지 않았습니다."
+                else templates["memory_unused"]
             ),
         },
     ]
@@ -3145,9 +3668,12 @@ def fast_final_comment(
     route_preview = " → ".join(place["name"] for place in route[:3])
     if len(route) > 3:
         route_preview += " → ..."
-    return (
-        f"{state['transport']} 이동과 자연어 요청을 기준으로 {route_preview} 순서가 가장 무난합니다. "
-        f"예상 비용은 {total_cost:,}원, 이동은 약 {total_move_minutes}분/{total_distance}km입니다."
+    return OUTPUT_TEMPLATES["fast_final_comment"].format(
+        transport=state["transport"],
+        route_preview=route_preview,
+        total_cost=total_cost,
+        total_move_minutes=total_move_minutes,
+        total_distance=total_distance,
     )
 
 
@@ -3189,310 +3715,59 @@ def llm_response_tool(
             "LLM 실패 Fallback",
         )
 
-
-
-BASE_DIR = BASE_DIR
-GRAPH_MEMORY = GRAPH_MEMORY
-END = END
-StateGraph = StateGraph
-logger = logging.getLogger(__name__)
-
-
-def validate_input_node(graph_state: AgentGraphState) -> AgentGraphState:
-    state, errors = validate_and_normalize(graph_state["payload"])
-    if errors:
-        return {"errors": errors, "status": 400, "result": {"errors": errors}}
-    assert state is not None
-    return {"state": state, "errors": [], "status": 200}
-
-
-def analyze_intent_node(graph_state: AgentGraphState) -> AgentGraphState:
-    state = graph_state["state"]
-    tags, intent, intent_mode = llm_intent_tool(state)
-    state["tags"] = tags
-    return {"state": state, "tags": tags, "intent": intent, "intent_mode": intent_mode}
-
-
-def retrieve_places_node(graph_state: AgentGraphState) -> AgentGraphState:
-    state = graph_state["state"]
-    tags = graph_state.get("tags", state["tags"])
-    intent = graph_state.get("intent", {})
-    retry_count = graph_state.get("retry_count", 0)
+def build_plan_with_local_tools(
+    state: AgentState,
+    payload: dict[str, Any],
+    tool_agent_events: list[str] | None = None,
+) -> tuple[dict[str, Any], int]:
     try:
-        slots, candidates = candidate_lookup_tool(
-            state,
-            tags,
-            intent,
-            max_candidates=72 if retry_count else 48,
-        )
+        selection = select_trip_candidates_core(state)
     except RuntimeError as error:
-        logger.error("Place candidate lookup failed: %s", error)
-        errors = [
-            str(error),
-            (
-                "장소 데이터를 사용하려면 KAKAO_REST_API_KEY를 설정하거나 "
-                "/api/places/sync로 장소 캐시를 다시 생성하세요."
-            ),
-        ]
-        return {"errors": errors, "status": 503, "result": {"errors": errors}}
-
-    candidates, tool_events = tavily_review_boost_tool(state, intent, candidates)
-    user_query = " ".join(
-        [
-            state["style_text"],
-            " ".join(tags),
-            json_dumps_for_query(intent),
-        ]
-    )
-    vector_documents = retrieve_relevant_place_documents(user_query, max_documents=10 if retry_count else 8)
-    vector_names = {
-        str(document.get("metadata", {}).get("name"))
-        for document in vector_documents
-        if document.get("metadata", {}).get("name")
-    }
-    if vector_names:
-        for candidate in candidates:
-            if candidate.get("name") in vector_names:
-                candidate["agent_score"] = round(float(candidate.get("agent_score", 0)) + 1.5, 2)
-        candidates.sort(key=lambda item: float(item.get("agent_score", 0)), reverse=True)
-        tool_events.append(f"FAISS VectorStore RAG Retriever: 관련 장소 문서 {len(vector_documents)}개를 LLM Context와 후보 점수에 반영")
-    else:
-        tool_events.append("FAISS VectorStore RAG Retriever: 관련 문서 없음 또는 임베딩 backend 없음")
-    if retry_count:
-        tool_events.append(f"품질 검사 기반 재검색 Loop: retry_count={retry_count}")
-    return {
-        "slots": slots,
-        "candidates": candidates,
-        "retrieved_documents": vector_documents + candidate_documents_to_context(candidates),
-        "tool_events": tool_events,
-    }
-
-
-def plan_route_node(graph_state: AgentGraphState) -> AgentGraphState:
-    state = graph_state["state"]
-    recommended, planner_mode, planner_decision = llm_route_planner_tool(
-        state,
-        graph_state.get("tags", state["tags"]),
-        graph_state.get("intent", {}),
-        graph_state.get("slots", []),
-        graph_state.get("candidates", []),
-        graph_state.get("retrieved_documents", []),
-    )
-    return {
-        "recommended": recommended,
-        "planner_mode": planner_mode,
-        "planner_decision": planner_decision,
-    }
-
-
-def json_dumps_for_query(value: Any) -> str:
-    try:
-        import json
-
-        return json.dumps(value, ensure_ascii=False)
-    except TypeError:
-        return str(value)
-
-
-def check_quality_node(graph_state: AgentGraphState) -> AgentGraphState:
-    state = graph_state["state"]
-    recommended = graph_state.get("recommended", [])
-    slots = graph_state.get("slots", [])
-    retry_count = graph_state.get("retry_count", 0)
-    required_roles = {slot.get("role") for slot in slots if slot.get("role")}
-    selected_roles = {place.get("slot_role") or place.get("role") for place in recommended if place.get("slot_role") or place.get("role")}
-    missing_roles = sorted(required_roles - selected_roles)
-    target_count = min(len(slots), 5) if slots else 3
-    average_quality = (
-        sum(float(place.get("quality_score") or place.get("score") or 0) for place in recommended) / len(recommended)
-        if recommended
-        else 0
-    )
-
-    reasons: list[str] = []
-    too_few_recommendations = len(recommended) < max(1, target_count - 1)
-    if not recommended:
-        reasons.append("LLM이 추천 장소를 선택하지 못했습니다.")
-    if too_few_recommendations:
-        reasons.append(f"추천 장소 수가 부족합니다. selected={len(recommended)}, target={target_count}")
-    if missing_roles:
-        reasons.append(f"일정 구성에 필요한 role이 부족합니다: {', '.join(missing_roles)}")
-    if recommended and average_quality < 3.2:
-        reasons.append(f"추천 평균 품질 점수가 낮습니다: {average_quality:.2f}")
-
-    if not reasons:
+        logger.error("Place candidate selection failed: %s", error)
         return {
-            "quality_status": "quality_ok",
-            "quality_route": "final_response",
-            "quality_reasons": [],
-        }
+            "errors": [
+                str(error),
+                "장소 데이터를 사용하려면 KAKAO_REST_API_KEY를 설정하거나 /api/places/sync로 장소 캐시를 다시 생성하세요.",
+            ]
+        }, 503
 
-    logger.warning("Route quality low: %s", " / ".join(reasons))
-    state["warnings"].append("추천 품질 검사: " + " / ".join(reasons))
-    if retry_count < 1:
+    recommended = selection.get("recommended", [])
+    if not recommended:
         return {
-            "retry_count": retry_count + 1,
-            "quality_status": "quality_low",
-            "quality_route": "retry",
-            "quality_reasons": reasons,
-        }
-    return {
-        "quality_status": "quality_low",
-        "quality_route": "fallback_route" if not recommended or missing_roles or too_few_recommendations else "final_response",
-        "quality_reasons": reasons,
-    }
-
-
-def fallback_route_node(graph_state: AgentGraphState) -> AgentGraphState:
-    state = graph_state["state"]
-    excluded_place_names = used_place_names_from_memory(state.get("memory_context", []))
-    excluded_place_names.discard(state["start_name"])
-    recommended = recommendation_tool(
-        graph_state.get("tags", state["tags"]),
-        state["budget"],
-        state["weather"],
-        state["duration"],
-        state["start_point"],
-        state["transport"],
-        excluded_place_names,
-        graph_state.get("intent", {}),
-    )
-    return {
-        "recommended": recommended,
-        "planner_mode": graph_state.get("planner_mode") or "규칙 기반 Fallback",
-        "planner_decision": {
-            "decision_summary": "LLM 동선 선택을 사용할 수 없어 규칙 기반 추천으로 대체했습니다.",
-        },
-    }
-
-
-def final_response_node(graph_state: AgentGraphState) -> AgentGraphState:
-    if graph_state.get("result") and graph_state.get("status", 200) != 200:
-        return graph_state
-
-    state = graph_state["state"]
-    recommended = graph_state.get("recommended", [])
-    if not recommended:
-        errors = [
-            "로컬 JSON DB에 추천 가능한 청주 장소가 없습니다.",
-            "/api/places/sync로 장소 데이터를 다시 수집해 주세요.",
-        ]
-        return {"errors": errors, "status": 503, "result": {"errors": errors}}
-
-    planner_mode = graph_state.get("planner_mode", "규칙 기반 추천")
-    if "Fallback" in planner_mode:
-        state["warnings"].append(planner_mode)
-    else:
-        state["warnings"].append(f"{graph_state.get('intent_mode', '규칙 기반 의도 해석')} / {planner_mode}")
-
-    constrained = enforce_day_trip_constraints(
-        state,
-        recommended,
-        graph_state.get("candidates", []),
-        graph_state.get("intent", {}),
-    )
-    if constrained != recommended:
-        state["warnings"].append("당일치기 제약에 맞춰 예산 초과 또는 도보 15분 초과 후보를 제외했습니다.")
-    recommended = constrained
-    if not recommended:
-        errors = [
-            "예산과 이동 조건 안에서 추천 가능한 장소를 찾지 못했습니다.",
-            "예산을 조금 늘리거나 여행 스타일을 넓게 입력해 주세요.",
-        ]
-        return {"errors": errors, "status": 422, "result": {"errors": errors}}
-    append_missing_keyword_warnings(state, recommended)
+            "errors": [
+                "예산과 이동 조건 안에서 추천 가능한 장소를 찾지 못했습니다.",
+                "예산을 조금 늘리거나 여행 스타일을 넓게 입력해 주세요.",
+            ]
+        }, 422
 
     legs = distance_tool(state["start_point"], recommended, state["transport"], state["duration"])
+    tool_events = [*(tool_agent_events or []), *selection.get("tool_events", [])]
     result = output_parser(
         state,
         recommended,
         legs,
-        planner_mode=planner_mode,
-        intent=graph_state.get("intent", {}),
-        planner_decision=graph_state.get("planner_decision", {}),
-        rag_document_count=len(graph_state.get("retrieved_documents", [])),
-        tool_events=graph_state.get("tool_events", []),
+        planner_mode=selection.get("planner_mode", "규칙 기반 추천"),
+        intent=selection.get("intent", {}),
+        planner_decision=selection.get("planner_decision", {}),
+        rag_document_count=len(selection.get("retrieved_documents", [])),
+        tool_events=tool_events,
     )
-    remember_turn(state["session_id"], graph_state["payload"], result)
-    return {"state": state, "legs": legs, "result": result, "status": 200}
-
-
-def route_after_validate(graph_state: AgentGraphState) -> str:
-    return "final_response" if graph_state.get("errors") else "analyze_intent"
-
-
-def route_after_retrieve(graph_state: AgentGraphState) -> str:
-    return "final_response" if graph_state.get("errors") else "plan_route"
-
-
-def route_after_quality(graph_state: AgentGraphState) -> str:
-    return graph_state.get("quality_route", "final_response")
-
-
-def build_agent_graph() -> Any:
-    if StateGraph is None:
-        return None
-    graph_builder = StateGraph(AgentGraphState)
-    graph_builder.add_node("validate_input", validate_input_node)
-    graph_builder.add_node("analyze_intent", analyze_intent_node)
-    graph_builder.add_node("retrieve_places", retrieve_places_node)
-    graph_builder.add_node("plan_route", plan_route_node)
-    graph_builder.add_node("check_quality", check_quality_node)
-    graph_builder.add_node("fallback_route", fallback_route_node)
-    graph_builder.add_node("final_response", final_response_node)
-    graph_builder.set_entry_point("validate_input")
-    graph_builder.add_conditional_edges(
-        "validate_input",
-        route_after_validate,
-        {"analyze_intent": "analyze_intent", "final_response": "final_response"},
-    )
-    graph_builder.add_edge("analyze_intent", "retrieve_places")
-    graph_builder.add_conditional_edges(
-        "retrieve_places",
-        route_after_retrieve,
-        {"plan_route": "plan_route", "final_response": "final_response"},
-    )
-    graph_builder.add_edge("plan_route", "check_quality")
-    graph_builder.add_conditional_edges(
-        "check_quality",
-        route_after_quality,
-        {"retry": "retrieve_places", "fallback_route": "fallback_route", "final_response": "final_response"},
-    )
-    graph_builder.add_edge("fallback_route", "final_response")
-    graph_builder.add_edge("final_response", END)
-    return graph_builder.compile(checkpointer=GRAPH_MEMORY) if GRAPH_MEMORY else graph_builder.compile()
-
-
-AGENT_GRAPH = build_agent_graph()
+    remember_turn(state["session_id"], payload, result)
+    return result, 200
 
 
 def run_agent(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    initial_state: AgentGraphState = {"payload": payload}
-    if AGENT_GRAPH is None:
-        graph_state = dict(initial_state)
-        graph_state.update(validate_input_node(graph_state))
-        if graph_state.get("errors"):
-            return graph_state["result"], graph_state.get("status", 400)
-        graph_state.update(analyze_intent_node(graph_state))
-        graph_state.update(retrieve_places_node(graph_state))
-        if graph_state.get("errors"):
-            return graph_state["result"], graph_state.get("status", 503)
-        graph_state.update(plan_route_node(graph_state))
-        graph_state.update(check_quality_node(graph_state))
-        if graph_state.get("quality_route") == "retry":
-            graph_state.update(retrieve_places_node(graph_state))
-            if graph_state.get("errors"):
-                return graph_state["result"], graph_state.get("status", 503)
-            graph_state.update(plan_route_node(graph_state))
-            graph_state.update(check_quality_node(graph_state))
-        if graph_state.get("quality_route") == "fallback_route":
-            graph_state.update(fallback_route_node(graph_state))
-        graph_state.update(final_response_node(graph_state))
-    else:
-        session_id = normalize_session_id(payload.get("session_id"))
-        config = {"configurable": {"thread_id": session_id}}
-        graph_state = AGENT_GRAPH.invoke(initial_state, config=config)
-    return graph_state.get("result", {"errors": ["Agent 실행 결과가 비어 있습니다."]}), graph_state.get("status", 500)
+    state, errors = validate_and_normalize(payload)
+    if errors or state is None:
+        return {"errors": errors}, 400
+
+    agent_result, tool_agent_events = run_tool_agent(state, payload)
+    if agent_result:
+        remember_turn(state["session_id"], payload, agent_result)
+        return agent_result, 200
+
+    state["warnings"].extend(tool_agent_events)
+    return build_plan_with_local_tools(state, payload, tool_agent_events)
 
 
 from fastapi import FastAPI, Request
